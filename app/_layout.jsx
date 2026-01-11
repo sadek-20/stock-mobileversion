@@ -1,9 +1,11 @@
+// app/_layout.jsx
 import { useEffect, useState } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { View, StyleSheet, ActivityIndicator, Platform } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from '../contexts/AuthContext';
+import { StockProvider } from '../contexts/StockContext'; // Add this import
 import { useFrameworkReady } from '../hooks/useFrameworkReady';
 import { initializeStorage } from '../utils/storage';
 
@@ -26,6 +28,8 @@ function AndroidSafeLoader({ size = 'large', color = '#3b82f6' }) {
 }
 
 /* ---------------- ROOT NAV ---------------- */
+// ... (previous imports remain the same)
+
 function RootLayoutNav() {
   const { user, loading } = useAuth();
   const segments = useSegments();
@@ -39,8 +43,9 @@ function RootLayoutNav() {
     const isLogin = segments[0] === 'login';
     const isSignup = segments[0] === 'signup';
     const isNotFound = segments[0] === '+not-found';
+    const isProductDetails = segments[0] === 'product-details';
 
-    if (!user && (inTabs || isNotFound)) {
+    if (!user && (inTabs || isNotFound || isProductDetails)) {
       router.replace('/login');
     } else if (user && (isLogin || isSignup)) {
       router.replace('/(tabs)');
@@ -105,13 +110,43 @@ function RootLayoutNav() {
         }}
       />
       <Stack.Screen
+        name="product-details"
+        options={{
+          animation: 'slide_from_right',
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
+        name="in"
+        options={{
+          presentation: 'modal',
+          animation: 'slide_from_bottom',
+          headerShown: true,
+          title: 'Stock In',
+          headerStyle: { backgroundColor: '#ffffff' },
+          headerTitleStyle: {
+            fontSize: 18,
+            fontWeight: '600',
+            color: '#1e293b',
+          },
+          headerTintColor: '#3b82f6',
+          headerShadowVisible: false,
+        }}
+      />
+      <Stack.Screen
+        name="edit-product"
+        options={{
+          animation: 'slide_from_right',
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
         name="+not-found"
         options={{ animation: 'fade', presentation: 'modal' }}
       />
     </Stack>
   );
 }
-
 /* ---------------- STORAGE LOADING SCREEN ---------------- */
 function LoadingScreen() {
   return (
@@ -170,8 +205,12 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <AuthProvider>
-        <RootLayoutNav />
-        <StatusBar style="dark" backgroundColor="#ffffff" />
+        <StockProvider>
+          {' '}
+          {/* Wrap with StockProvider */}
+          <RootLayoutNav />
+          <StatusBar style="dark" backgroundColor="#ffffff" />
+        </StockProvider>
       </AuthProvider>
     </SafeAreaProvider>
   );

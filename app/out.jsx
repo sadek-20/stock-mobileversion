@@ -10,69 +10,67 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Animated,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import {
-  getProducts,
-  updateProductQuantity,
-  addTransaction,
-} from '../utils/storage';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useStock } from '../contexts/StockContext';
 import {
   TrendingDown,
   Package,
   AlertTriangle,
   XCircle,
   ArrowLeft,
-  Calendar,
   FileText,
 } from 'lucide-react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 
 export default function StockOutScreen() {
   const params = useLocalSearchParams();
   const router = useRouter();
+  const { stockOut, products, loading: contextLoading } = useStock();
+
   const [product, setProduct] = useState(null);
   const [quantity, setQuantity] = useState('');
   const [description, setDescription] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [validationError, setValidationError] = useState('');
   const [remainingStock, setRemainingStock] = useState(0);
 
   useEffect(() => {
     loadProduct();
-  }, []);
+  }, [products]);
 
   useEffect(() => {
     if (product && quantity) {
       const qty = parseInt(quantity) || 0;
-      if (qty > product.quantity) {
+      if (qty > product.currentStock) {
         setValidationError(
-          `Cannot exceed available stock (${product.quantity})`
+          `Cannot exceed available stock (${product.currentStock})`
         );
       } else if (qty <= 0) {
         setValidationError('Quantity must be greater than 0');
       } else {
         setValidationError('');
       }
-      setRemainingStock(product.quantity - qty);
+      setRemainingStock(product.currentStock - qty);
     }
   }, [quantity, product]);
 
-  const loadProduct = async () => {
-    try {
-      const products = await getProducts();
-      const found = products.find((p) => p.id === params.productId);
-      if (found) {
-        setProduct(found);
-        setRemainingStock(found.quantity);
-      } else {
-        Alert.alert('Error', 'Product not found', [
-          { text: 'OK', onPress: () => router.back() },
-        ]);
-      }
-    } catch (error) {
-      Alert.alert('Error', 'Failed to load product');
+  const loadProduct = () => {
+    if (!params.productId || !products || products.length === 0) {
+      Alert.alert('Error', 'Product not found', [
+        { text: 'OK', onPress: () => router.back() },
+      ]);
+      return;
+    }
+
+    const found = products.find((p) => p._id === params.productId);
+    if (found) {
+      setProduct(found);
+      setRemainingStock(found.currentStock);
+    } else {
+      Alert.alert('Error', 'Product not found', [
+        { text: 'OK', onPress: () => router.back() },
+      ]);
     }
   };
 
@@ -85,11 +83,16 @@ export default function StockOutScreen() {
       return;
     }
 
+    if (!product) {
+      Alert.alert('Error', 'Product information is missing');
+      return;
+    }
+
     const qty = parseInt(quantity);
-    if (qty > product.quantity) {
+    if (qty > product.currentStock) {
       Alert.alert(
         'Insufficient Stock',
-        `Quantity cannot exceed available stock (${product.quantity} ${product.unit})`
+        `Quantity cannot exceed available stock (${product.currentStock} ${product.unit})`
       );
       return;
     }
@@ -102,11 +105,11 @@ export default function StockOutScreen() {
       return;
     }
 
-    if (qty > product.quantity * 0.5) {
+    if (qty > product.currentStock * 0.5) {
       Alert.alert(
         'Large Quantity Warning',
         `You are removing ${qty} ${product.unit}, which is ${Math.round(
-          (qty / product.quantity) * 100
+          (qty / product.currentStock) * 100
         )}% of your total stock. Are you sure?`,
         [
           { text: 'Cancel', style: 'cancel' },
@@ -120,44 +123,44 @@ export default function StockOutScreen() {
   };
 
   const processStockOut = async () => {
-    setLoading(true);
+    setSubmitting(true);
 
     try {
-      await updateProductQuantity(product.id, -parseInt(quantity));
-      await addTransaction({
-        type: 'OUT',
-        productId: product.id,
-        productName: product.name,
-        quantity: parseInt(quantity),
-        description: description.trim(),
-        date: new Date().toISOString(),
-      });
-
-      Alert.alert(
-        'Stock Removed Successfully!',
-        `Removed ${quantity} ${product.unit} from ${product.name}`,
-        [
-          {
-            text: 'OK',
-            onPress: () => router.back(),
-          },
-        ]
+      const result = await stockOut(
+        product._id,
+        parseInt(quantity),
+        description.trim()
       );
+
+      if (result.success) {
+        Alert.alert(
+          'Success!',
+          `Removed ${quantity} ${product.unit} from ${product.name}`,
+          [
+            {
+              text: 'OK',
+              onPress: () => router.back(),
+            },
+          ]
+        );
+      } else {
+        Alert.alert('Error', result.message || 'Failed to remove stock');
+      }
     } catch (error) {
       Alert.alert(
         'Operation Failed',
         'There was an error removing stock. Please try again.'
       );
-      setLoading(false);
+    } finally {
+      setSubmitting(false);
     }
   };
 
   const formatQuantity = (value) => {
-    // Remove non-numeric characters
     return value.replace(/[^0-9]/g, '');
   };
 
-  if (!product) {
+  if (contextLoading || !product) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#3b82f6" />
@@ -167,7 +170,7 @@ export default function StockOutScreen() {
   }
 
   const getStockStatusColor = () => {
-    const percentage = (remainingStock / product.quantity) * 100;
+    const percentage = (remainingStock / product.currentStock) * 100;
     if (percentage < 20) return '#ef4444';
     if (percentage < 50) return '#f59e0b';
     return '#10b981';
@@ -213,14 +216,16 @@ export default function StockOutScreen() {
               </View>
               <View style={styles.productInfo}>
                 <Text style={styles.productName}>{product.name}</Text>
-                <Text style={styles.productUnit}>{product.unit}</Text>
+                <Text style={styles.productUnit}>
+                  {product.unit || 'units'}
+                </Text>
               </View>
             </View>
 
             <View style={styles.stockInfo}>
               <View style={styles.stockItem}>
                 <Text style={styles.stockLabel}>Current Stock</Text>
-                <Text style={styles.stockValue}>{product.quantity}</Text>
+                <Text style={styles.stockValue}>{product.currentStock}</Text>
               </View>
               <View style={styles.stockDivider} />
               <View style={styles.stockItem}>
@@ -233,15 +238,16 @@ export default function StockOutScreen() {
               </View>
             </View>
 
-            {remainingStock < product.quantity * 0.3 && remainingStock > 0 && (
-              <View style={styles.warningBox}>
-                <AlertTriangle size={18} color="#f59e0b" />
-                <Text style={styles.warningText}>
-                  Stock will be low after this removal ({remainingStock}{' '}
-                  remaining)
-                </Text>
-              </View>
-            )}
+            {remainingStock < product.currentStock * 0.3 &&
+              remainingStock > 0 && (
+                <View style={styles.warningBox}>
+                  <AlertTriangle size={18} color="#f59e0b" />
+                  <Text style={styles.warningText}>
+                    Stock will be low after this removal ({remainingStock}{' '}
+                    remaining)
+                  </Text>
+                </View>
+              )}
 
             {remainingStock === 0 && (
               <View style={styles.dangerBox}>
@@ -259,7 +265,7 @@ export default function StockOutScreen() {
 
             <View style={styles.inputContainer}>
               <Text style={styles.label}>
-                Quantity to Remove ({product.unit})
+                Quantity to Remove ({product.unit || 'units'})
                 <Text style={styles.required}> *</Text>
               </Text>
               <View style={styles.quantityInputContainer}>
@@ -272,7 +278,7 @@ export default function StockOutScreen() {
                   placeholderTextColor="#94a3b8"
                   maxLength={6}
                 />
-                <Text style={styles.unitLabel}>{product.unit}</Text>
+                <Text style={styles.unitLabel}>{product.unit || 'units'}</Text>
               </View>
 
               {validationError && (
@@ -286,7 +292,7 @@ export default function StockOutScreen() {
               <View style={styles.quickSelectContainer}>
                 <Text style={styles.quickSelectLabel}>Quick Select:</Text>
                 <View style={styles.quickSelectButtons}>
-                  {[1, 5, 10, product.quantity].map((value) => (
+                  {[1, 5, 10, product.currentStock].map((value) => (
                     <TouchableOpacity
                       key={value}
                       style={styles.quickSelectButton}
@@ -364,7 +370,7 @@ export default function StockOutScreen() {
               <View style={styles.summaryItem}>
                 <Text style={styles.summaryLabel}>Removing</Text>
                 <Text style={styles.summaryValue}>
-                  {quantity || '0'} {product.unit}
+                  {quantity || '0'} {product.unit || 'units'}
                 </Text>
               </View>
               <View style={styles.summaryItem}>
@@ -375,7 +381,7 @@ export default function StockOutScreen() {
                     { color: getStockStatusColor() },
                   ]}
                 >
-                  {remainingStock} {product.unit}
+                  {remainingStock} {product.unit || 'units'}
                 </Text>
               </View>
             </View>
@@ -385,7 +391,7 @@ export default function StockOutScreen() {
           <TouchableOpacity
             style={[
               styles.submitButton,
-              (loading ||
+              (submitting ||
                 !quantity ||
                 !description.trim() ||
                 validationError) &&
@@ -393,7 +399,10 @@ export default function StockOutScreen() {
             ]}
             onPress={handleSubmit}
             disabled={
-              loading || !quantity || !description.trim() || !!validationError
+              submitting ||
+              !quantity ||
+              !description.trim() ||
+              !!validationError
             }
           >
             <LinearGradient
@@ -402,7 +411,7 @@ export default function StockOutScreen() {
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 0 }}
             />
-            {loading ? (
+            {submitting ? (
               <ActivityIndicator color="#ffffff" />
             ) : (
               <>

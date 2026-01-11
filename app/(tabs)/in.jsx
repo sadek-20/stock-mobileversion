@@ -1,4 +1,5 @@
-import { useState, useCallback } from 'react';
+// app/(tabs)/in.jsx
+import { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -9,14 +10,12 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import { useFocusEffect } from 'expo-router';
-import {
-  getProducts,
-  saveProduct,
-  updateProductQuantity,
-  addTransaction,
-} from '../../utils/storage';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useAuth } from '../../contexts/AuthContext';
+import { useStock } from '../../contexts/StockContext';
+
+const API_URL = 'http://192.168.100.105:5000/api';
 
 export default function StockInScreen() {
   const [products, setProducts] = useState([]);
@@ -25,14 +24,24 @@ export default function StockInScreen() {
 
   const [newProductName, setNewProductName] = useState('');
   const [newProductUnit, setNewProductUnit] = useState('');
+  const [newProductQuantity, setNewProductQuantity] = useState('');
 
   const [quantity, setQuantity] = useState('');
   const [description, setDescription] = useState('');
   const [loading, setLoading] = useState(false);
 
+  const router = useRouter();
+  const { token } = useAuth();
+  const { fetchProducts, stockIn, createProduct } = useStock();
+
   const loadProducts = async () => {
-    const data = await getProducts();
-    setProducts(data || []);
+    try {
+      const data = await fetchProducts();
+      setProducts(data || []);
+    } catch (error) {
+      console.error('Error loading products:', error);
+      Alert.alert('Error', 'Failed to load products');
+    }
   };
 
   useFocusEffect(
@@ -45,18 +54,19 @@ export default function StockInScreen() {
     setSelectedProduct(null);
     setNewProductName('');
     setNewProductUnit('');
+    setNewProductQuantity('');
     setQuantity('');
     setDescription('');
   };
 
   const handleSubmit = async () => {
-    if (!quantity || parseInt(quantity) <= 0) {
-      Alert.alert(
-        'Invalid Quantity',
-        'Please enter a valid quantity greater than 0'
-      );
-      return;
-    }
+    // if (!quantity || parseInt(quantity) <= 0) {
+    //   Alert.alert(
+    //     'Invalid Quantity',
+    //     'Please enter a valid quantity greater than 0'
+    //   );
+    //   return;
+    // }
 
     if (!description.trim()) {
       Alert.alert(
@@ -70,6 +80,7 @@ export default function StockInScreen() {
 
     try {
       let product = selectedProduct;
+      let productId = selectedProduct?._id;
 
       // 👉 ADD NEW PRODUCT MODE
       if (mode === 'new') {
@@ -82,14 +93,25 @@ export default function StockInScreen() {
           return;
         }
 
-        product = {
-          id: Date.now().toString(),
+        const productData = {
           name: newProductName.trim(),
           unit: newProductUnit.trim(),
-          quantity: 0,
+          currentStock: parseInt(newProductQuantity) || 0,
         };
 
-        await saveProduct(product);
+        const result = await createProduct(productData);
+
+        if (!result.success) {
+          Alert.alert('Error', result.message || 'Failed to create product');
+          setLoading(false);
+          return;
+        }
+
+        product = result.data;
+        productId = result.data._id;
+
+        // Reload products to include the new one
+        await loadProducts();
       }
 
       // 👉 SELECT MODE VALIDATION
@@ -104,25 +126,32 @@ export default function StockInScreen() {
 
       const qty = parseInt(quantity);
 
-      await updateProductQuantity(product.id, qty);
+      // Use stockIn from context
+      const result = await stockIn(productId, qty, description.trim());
 
-      await addTransaction({
-        type: 'IN',
-        productId: product.id,
-        productName: product.name,
-        quantity: qty,
-        description: description.trim(),
-      });
+      console.log(result, 'result');
+
+      if (!result.success) {
+        Alert.alert('Error', result.message || 'Failed to add stock');
+        setLoading(false);
+        return;
+      }
 
       Alert.alert(
         'Success!',
-        `Added ${qty} ${product.unit} to ${product.name}`,
+        `Added ${qty} ${product.unit || newProductUnit} to ${
+          product.name || newProductName
+        }`,
         [{ text: 'OK', onPress: () => resetForm() }]
       );
 
       resetForm();
-      loadProducts();
+      await loadProducts();
+
+      // Navigate back to products screen after successful addition
+      router.back();
     } catch (error) {
+      console.error('Stock in error:', error);
       Alert.alert(
         'Operation Failed',
         'There was an error adding stock. Please try again.'
@@ -156,6 +185,7 @@ export default function StockInScreen() {
                 setMode('select');
                 setNewProductName('');
                 setNewProductUnit('');
+                setNewProductQuantity('');
               }}
             >
               <Ionicons
@@ -225,10 +255,10 @@ export default function StockInScreen() {
                   <View style={styles.productList}>
                     {products.map((product) => (
                       <TouchableOpacity
-                        key={product.id}
+                        key={product._id || product.id}
                         style={[
                           styles.productCard,
-                          selectedProduct?.id === product.id &&
+                          selectedProduct?._id === product._id &&
                             styles.productCardSelected,
                         ]}
                         onPress={() => setSelectedProduct(product)}
@@ -236,7 +266,7 @@ export default function StockInScreen() {
                         <View
                           style={[
                             styles.productIndicator,
-                            selectedProduct?.id === product.id &&
+                            selectedProduct?._id === product._id &&
                               styles.productIndicatorSelected,
                           ]}
                         >
@@ -244,7 +274,7 @@ export default function StockInScreen() {
                             name="cube"
                             size={20}
                             color={
-                              selectedProduct?.id === product.id
+                              selectedProduct?._id === product._id
                                 ? '#fff'
                                 : '#666'
                             }
@@ -253,7 +283,7 @@ export default function StockInScreen() {
                         <Text
                           style={[
                             styles.productName,
-                            selectedProduct?.id === product.id &&
+                            selectedProduct?._id === product._id &&
                               styles.productNameSelected,
                           ]}
                         >
@@ -262,11 +292,12 @@ export default function StockInScreen() {
                         <Text
                           style={[
                             styles.productQuantity,
-                            selectedProduct?.id === product.id &&
+                            selectedProduct?._id === product._id &&
                               styles.productQuantitySelected,
                           ]}
                         >
-                          Current: {product.quantity} {product.unit}
+                          Current: {product.currentStock || 0}{' '}
+                          {product.unit || 'units'}
                         </Text>
                       </TouchableOpacity>
                     ))}
@@ -316,6 +347,25 @@ export default function StockInScreen() {
                   </View>
                 </View>
               </View>
+
+              <View style={styles.inputContainer}>
+                <Text style={styles.label}>Initial Stock Quantity</Text>
+                <View style={styles.inputWithIcon}>
+                  <Ionicons
+                    name="cube-outline"
+                    size={20}
+                    color="#666"
+                    style={styles.inputIcon}
+                  />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Enter initial quantity"
+                    value={newProductQuantity}
+                    onChangeText={setNewProductQuantity}
+                    keyboardType="numeric"
+                  />
+                </View>
+              </View>
             </View>
           )}
         </View>
@@ -340,8 +390,10 @@ export default function StockInScreen() {
                 onChangeText={setQuantity}
                 keyboardType="numeric"
               />
-              {selectedProduct && (
-                <Text style={styles.unitLabel}>{selectedProduct.unit}</Text>
+              {(selectedProduct || mode === 'new') && (
+                <Text style={styles.unitLabel}>
+                  {selectedProduct?.unit || newProductUnit || 'units'}
+                </Text>
               )}
             </View>
           </View>
@@ -375,12 +427,20 @@ export default function StockInScreen() {
           style={[
             styles.submitButton,
             loading && styles.submitButtonDisabled,
-            !selectedProduct &&
-              mode === 'select' &&
+            mode === 'select' &&
+              !selectedProduct &&
+              styles.submitButtonDisabled,
+            mode === 'new' &&
+              (!newProductName || !newProductUnit) &&
               styles.submitButtonDisabled,
           ]}
           onPress={handleSubmit}
-          disabled={loading || (mode === 'select' && !selectedProduct)}
+          disabled={
+            loading ||
+            (mode === 'select' && !selectedProduct) ||
+            (mode === 'new' &&
+              (!newProductName.trim() || !newProductUnit.trim()))
+          }
         >
           {loading ? (
             <ActivityIndicator color="#fff" />
@@ -616,6 +676,8 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 10,
     elevation: 5,
+    marginTop: 8,
+    marginBottom: 30,
   },
   submitButtonDisabled: {
     backgroundColor: '#cbd5e1',

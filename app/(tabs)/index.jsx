@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -9,7 +9,6 @@ import {
   SafeAreaView,
   StatusBar,
   ActivityIndicator,
-  Image,
   Dimensions,
   Alert,
   TextInput,
@@ -24,8 +23,8 @@ import {
   Search,
   Filter,
 } from 'lucide-react-native';
-import { getProducts, deleteProduct } from '../../utils/storage';
 import { useAuth } from '../../contexts/AuthContext';
+import { useStock } from '../../contexts/StockContext'; // Add this import
 
 const { width } = Dimensions.get('window');
 
@@ -37,10 +36,12 @@ export default function ProductsScreen() {
   const [sortBy, setSortBy] = useState('name'); // name, quantity, recent
   const router = useRouter();
   const { logout, user } = useAuth();
+  const { products: apiProducts, fetchProducts, stockOut } = useStock(); // Use the stock context
 
   const loadProducts = async () => {
     try {
-      const data = await getProducts();
+      // Replace local storage call with API call
+      const data = await fetchProducts();
       setProducts(data || []);
     } catch (error) {
       console.error('Error loading products:', error);
@@ -50,6 +51,7 @@ export default function ProductsScreen() {
     }
   };
 
+  // Sync products from context when they change
   useFocusEffect(
     useCallback(() => {
       setLoading(true);
@@ -57,19 +59,29 @@ export default function ProductsScreen() {
     }, [])
   );
 
+  // Also sync when apiProducts from context changes
+  useEffect(() => {
+    if (apiProducts) {
+      setProducts(apiProducts);
+      setLoading(false);
+    }
+  }, [apiProducts]);
+
   const onRefresh = async () => {
     setRefreshing(true);
     await loadProducts();
     setRefreshing(false);
   };
 
-  const handleOut = (product) => {
+  const handleOut = async (product) => {
+    // Push garee out screen-ka iyo product details
     router.push({
       pathname: '/out',
       params: {
-        productId: product.id,
+        productId: product._id,
         productName: product.name,
-        currentQuantity: product.quantity,
+        currentStock: product.currentStock,
+        productUnit: product.unit || 'units',
       },
     });
   };
@@ -82,7 +94,7 @@ export default function ProductsScreen() {
     // Navigate to product details or edit screen
     router.push({
       pathname: '/product-details',
-      params: { productId: product.id },
+      params: { productId: product._id },
     });
   };
 
@@ -97,11 +109,22 @@ export default function ProductsScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              await deleteProduct(product.id);
+              // Replace local delete with API call
+              const res = await fetch(`${API_URL}/products/${product._id}`, {
+                method: 'DELETE',
+                headers: authHeaders(),
+              });
+
+              if (!res.ok) {
+                const data = await res.json();
+                throw new Error(data.message);
+              }
+
               await loadProducts();
               Alert.alert('Success', 'Product deleted successfully');
             } catch (error) {
-              Alert.alert('Error', 'Failed to delete product');
+              console.error('Delete error:', error);
+              Alert.alert('Error', error.message || 'Failed to delete product');
             }
           },
         },
@@ -125,13 +148,14 @@ export default function ProductsScreen() {
     .filter(
       (product) =>
         product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        product.unit.toLowerCase().includes(searchQuery.toLowerCase())
+        (product.unit &&
+          product.unit.toLowerCase().includes(searchQuery.toLowerCase()))
     )
     .sort((a, b) => {
       if (sortBy === 'name') {
         return a.name.localeCompare(b.name);
       } else if (sortBy === 'quantity') {
-        return b.quantity - a.quantity;
+        return b.currentStock - a.currentStock;
       } else {
         return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
       }
@@ -149,13 +173,13 @@ export default function ProductsScreen() {
 
   const totalProducts = products.length;
   const totalQuantity = products.reduce(
-    (sum, product) => sum + product.quantity,
+    (sum, product) => sum + (product?.currentStock || 0),
     0
   );
-  const lowStockItems = products.filter((p) => p.quantity < 10).length;
+  const lowStockItems = products.filter((p) => p.currentStock < 10).length;
 
   const renderProduct = ({ item }) => {
-    const stockStatus = getStockStatus(item.quantity);
+    const stockStatus = getStockStatus(item?.currentStock);
 
     return (
       <TouchableOpacity
@@ -178,7 +202,7 @@ export default function ProductsScreen() {
               {item.name}
             </Text>
             <View style={styles.productMeta}>
-              <Text style={styles.productUnit}>{item.unit}</Text>
+              <Text style={styles.productUnit}>{item.unit || 'units'}</Text>
               <View
                 style={[styles.stockBadge, { backgroundColor: stockStatus.bg }]}
               >
@@ -193,16 +217,16 @@ export default function ProductsScreen() {
         <View style={styles.productFooter}>
           <View style={styles.quantityContainer}>
             <Text style={styles.quantityLabel}>Current Stock</Text>
-            <Text style={styles.quantityValue}>{item.quantity}</Text>
+            <Text style={styles.quantityValue}>{item?.currentStock || 0}</Text>
           </View>
 
           <TouchableOpacity
             style={[
               styles.outButton,
-              item.quantity === 0 && styles.outButtonDisabled,
+              item.currentStock === 0 && styles.outButtonDisabled,
             ]}
             onPress={() => handleOut(item)}
-            disabled={item.quantity === 0}
+            disabled={item.currentStock === 0}
           >
             <TrendingDown size={18} color="#fff" />
             <Text style={styles.outButtonText}>Stock Out</Text>
@@ -331,7 +355,7 @@ export default function ProductsScreen() {
       <FlatList
         data={filteredProducts}
         renderItem={renderProduct}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item) => item._id || item.id} // Use _id for MongoDB
         contentContainerStyle={styles.list}
         refreshControl={
           <RefreshControl
@@ -357,7 +381,9 @@ export default function ProductsScreen() {
   );
 }
 
+// Styles remain the same...
 const styles = StyleSheet.create({
+  // ... (keep all your existing styles exactly as they are)
   container: {
     flex: 1,
     backgroundColor: '#f8fafc',
