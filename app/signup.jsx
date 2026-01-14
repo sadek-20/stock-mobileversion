@@ -93,7 +93,7 @@ export default function SignupScreen({ navigation }) {
     const result = await signup(formData);
     setLoading(false);
 
-    console.log('result in signUp screen', result);
+    // console.log('result in signUp screen', result);
 
     if (result.success) {
       Alert.alert(

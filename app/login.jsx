@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { use, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -44,8 +44,9 @@ export default function LoginScreen() {
     setLoading(false);
 
     if (!result.success) {
-      Alert.alert('Login-ku waa fashilantay', result.message);
+      return Alert.alert('Login-ku waa fashilantay', result.message);
     }
+
     // Navigation is handled by the auth context/root layout
   };
 

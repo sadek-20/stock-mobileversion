@@ -5,9 +5,11 @@ import { StatusBar } from 'expo-status-bar';
 import { View, StyleSheet, ActivityIndicator, Platform } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from '../contexts/AuthContext';
-import { StockProvider } from '../contexts/StockContext'; // Add this import
+import { StockProvider } from '../contexts/StockContext';
+import { CashProvider } from '../contexts/CashContext'; // Adjust path as needed
 import { useFrameworkReady } from '../hooks/useFrameworkReady';
 import { initializeStorage } from '../utils/storage';
+import TransactionHistoryScreen from './TransactionHistory'; // Add this import
 
 /* ---------------- ANDROID SAFE LOADER ---------------- */
 function AndroidSafeLoader({ size = 'large', color = '#3b82f6' }) {
@@ -28,8 +30,6 @@ function AndroidSafeLoader({ size = 'large', color = '#3b82f6' }) {
 }
 
 /* ---------------- ROOT NAV ---------------- */
-// ... (previous imports remain the same)
-
 function RootLayoutNav() {
   const { user, loading } = useAuth();
   const segments = useSegments();
@@ -44,8 +44,12 @@ function RootLayoutNav() {
     const isSignup = segments[0] === 'signup';
     const isNotFound = segments[0] === '+not-found';
     const isProductDetails = segments[0] === 'product-details';
+    const isTransactionHistory = segments[0] === 'TransactionHistory';
 
-    if (!user && (inTabs || isNotFound || isProductDetails)) {
+    if (
+      !user &&
+      (inTabs || isNotFound || isProductDetails || isTransactionHistory)
+    ) {
       router.replace('/login');
     } else if (user && (isLogin || isSignup)) {
       router.replace('/(tabs)');
@@ -117,6 +121,22 @@ function RootLayoutNav() {
         }}
       />
       <Stack.Screen
+        name="TransactionHistory"
+        options={{
+          animation: 'slide_from_right',
+          headerShown: true,
+          title: 'Transaction History',
+          headerStyle: { backgroundColor: '#ffffff' },
+          headerTitleStyle: {
+            fontSize: 18,
+            fontWeight: '600',
+            color: '#1e293b',
+          },
+          headerTintColor: '#3b82f6',
+          headerShadowVisible: false,
+        }}
+      />
+      <Stack.Screen
         name="in"
         options={{
           presentation: 'modal',
@@ -147,6 +167,7 @@ function RootLayoutNav() {
     </Stack>
   );
 }
+
 /* ---------------- STORAGE LOADING SCREEN ---------------- */
 function LoadingScreen() {
   return (
@@ -206,10 +227,10 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <AuthProvider>
         <StockProvider>
-          {' '}
-          {/* Wrap with StockProvider */}
-          <RootLayoutNav />
-          <StatusBar style="dark" backgroundColor="#ffffff" />
+          <CashProvider>
+            <RootLayoutNav />
+            <StatusBar style="dark" backgroundColor="#ffffff" />
+          </CashProvider>
         </StockProvider>
       </AuthProvider>
     </SafeAreaProvider>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,16 +10,73 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
-import { addCashEntry } from '../../utils/storage';
-import { Banknote, Smartphone, CreditCard, Save } from 'lucide-react-native';
+import {
+  Banknote,
+  Smartphone,
+  CreditCard,
+  Save,
+  TrendingUp,
+  Calendar,
+  Clock,
+  List,
+  ExternalLink,
+} from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useCash } from '../../contexts/CashContext';
+import { useNavigation } from '@react-navigation/native';
 
 export default function CashEntryScreen() {
+  const navigation = useNavigation();
+  const { addCash, balance, transactions, fetchCash } = useCash();
+
   const [amount, setAmount] = useState('');
   const [paymentType, setPaymentType] = useState('Cash');
   const [description, setDescription] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Calculate today's totals
+  const calculateTodayStats = () => {
+    const today = new Date().toISOString().split('T')[0];
+    let todayEntries = 0;
+    let todayTotal = 0;
+    let paymentCounts = {};
+
+    if (transactions && Array.isArray(transactions)) {
+      transactions.forEach((transaction) => {
+        if (!transaction?.createdAt) return;
+
+        const transactionDate = new Date(transaction.createdAt)
+          .toISOString()
+          .split('T')[0];
+
+        if (transactionDate === today) {
+          todayEntries++;
+          todayTotal += transaction.amount || 0;
+
+          // Count payment types
+          const type = transaction.paymentType || 'Unknown';
+          paymentCounts[type] = (paymentCounts[type] || 0) + 1;
+        }
+      });
+    }
+
+    // Find most used payment method today
+    let mostUsed = 'None';
+    let maxCount = 0;
+    Object.entries(paymentCounts).forEach(([method, count]) => {
+      if (count > maxCount) {
+        maxCount = count;
+        mostUsed = method;
+      }
+    });
+
+    return { todayEntries, todayTotal, mostUsed };
+  };
+
+  const { todayEntries, todayTotal, mostUsed } = calculateTodayStats();
 
   const handleSubmit = async () => {
     if (!amount || parseFloat(amount) <= 0) {
@@ -30,30 +87,36 @@ export default function CashEntryScreen() {
       return;
     }
 
-    setLoading(true);
+    setIsSubmitting(true);
 
     try {
       const amt = parseFloat(amount);
-      await addCashEntry({
+      const result = await addCash({
         amount: amt,
         paymentType,
-        description: description.trim() || 'Cash Entry',
-        date: new Date().toISOString(),
+        description: description.trim() || `${paymentType} Entry`,
       });
 
-      Alert.alert(
-        'Success!',
-        `Cash entry of ${amt.toLocaleString()} KSH recorded via ${paymentType}`,
-        [
-          {
-            text: 'OK',
-            onPress: () => {
-              setAmount('');
-              setDescription('');
+      if (result.success) {
+        Alert.alert(
+          'Success!',
+          `Cash entry of ${amt.toLocaleString()} KSH recorded via ${paymentType}`,
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                setAmount('');
+                setDescription('');
+              },
             },
-          },
-        ]
-      );
+          ]
+        );
+      } else {
+        Alert.alert(
+          'Operation Failed',
+          result.message || 'Failed to record transaction'
+        );
+      }
     } catch (error) {
       Alert.alert(
         'Operation Failed',
@@ -61,7 +124,20 @@ export default function CashEntryScreen() {
       );
       console.error('Cash entry error:', error);
     } finally {
-      setLoading(false);
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleRefresh = async () => {
+    if (fetchCash) {
+      setIsLoading(true);
+      try {
+        await fetchCash();
+      } catch (error) {
+        console.error('Failed to refresh:', error);
+      } finally {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -72,16 +148,36 @@ export default function CashEntryScreen() {
   ];
 
   const formatAmount = (value) => {
-    // Remove non-numeric characters except decimal point
     const numericValue = value.replace(/[^0-9.]/g, '');
-
-    // Handle multiple decimal points
     const parts = numericValue.split('.');
     if (parts.length > 2) {
       return parts[0] + '.' + parts.slice(1).join('');
     }
-
     return numericValue;
+  };
+
+  // Get latest transactions for preview
+  const recentTransactions = Array.isArray(transactions)
+    ? transactions.slice(0, 3)
+    : [];
+
+  const handleViewAll = () => {
+    if (navigation) {
+      navigation.navigate('TransactionHistory');
+    }
+  };
+
+  const handleTransactionPress = (transaction) => {
+    // Navigate to transaction detail or show modal
+    Alert.alert(
+      'Transaction Details',
+      `Amount: ${transaction.amount} KSH\nType: ${
+        transaction.paymentType
+      }\nDescription: ${transaction.description}\nDate: ${new Date(
+        transaction.createdAt
+      ).toLocaleString()}`,
+      [{ text: 'OK' }]
+    );
   };
 
   return (
@@ -92,6 +188,13 @@ export default function CashEntryScreen() {
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={isLoading}
+            onRefresh={handleRefresh}
+            colors={['#3b82f6']}
+          />
+        }
       >
         <View style={styles.header}>
           <LinearGradient
@@ -102,10 +205,24 @@ export default function CashEntryScreen() {
           >
             <View style={styles.headerContent}>
               <Banknote size={32} color="#ffffff" />
-              <Text style={styles.headerTitle}>Cash Entry</Text>
+              <Text style={styles.headerTitle}>Cash Management</Text>
               <Text style={styles.headerSubtitle}>
-                Record cash transactions
+                Balance:{' '}
+                {(balance || 0).toLocaleString('en-KE', {
+                  style: 'currency',
+                  currency: 'KES',
+                  minimumFractionDigits: 2,
+                })}
               </Text>
+              <TouchableOpacity
+                style={styles.refreshButton}
+                onPress={handleRefresh}
+                disabled={isLoading}
+              >
+                <Text style={styles.refreshText}>
+                  {isLoading ? 'Refreshing...' : 'Refresh Data'}
+                </Text>
+              </TouchableOpacity>
             </View>
           </LinearGradient>
         </View>
@@ -113,7 +230,7 @@ export default function CashEntryScreen() {
         <View style={styles.content}>
           {/* Amount Card */}
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>Amount Details</Text>
+            <Text style={styles.cardTitle}>Record New Transaction</Text>
 
             <View style={styles.inputContainer}>
               <Text style={styles.label}>
@@ -210,34 +327,145 @@ export default function CashEntryScreen() {
             </View>
           </View>
 
-          {/* Recent Transactions Preview */}
+          {/* Stats Card */}
           <View style={styles.card}>
-            <Text style={styles.cardTitle}>Quick Info</Text>
-            <View style={styles.infoGrid}>
-              <View style={styles.infoItem}>
-                <Text style={styles.infoLabel}>Today's Entries</Text>
-                <Text style={styles.infoValue}>0</Text>
+            <View style={styles.cardHeader}>
+              <Text style={styles.cardTitle}>Today's Summary</Text>
+              <TouchableOpacity
+                style={styles.viewAllButton}
+                onPress={handleViewAll}
+              >
+                <Text style={styles.viewAllText}>View All</Text>
+                <ExternalLink size={14} color="#3b82f6" />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.statsGrid}>
+              <View style={styles.statItem}>
+                <View style={[styles.statIcon, { backgroundColor: '#f0f9ff' }]}>
+                  <Calendar size={20} color="#0369a1" />
+                </View>
+                <Text style={styles.statLabel}>Entries</Text>
+                <Text style={styles.statValue}>{todayEntries}</Text>
               </View>
-              <View style={styles.infoItem}>
-                <Text style={styles.infoLabel}>Total Today</Text>
-                <Text style={styles.infoValue}>KSH 0</Text>
+
+              <View style={styles.statItem}>
+                <View style={[styles.statIcon, { backgroundColor: '#f0fdf4' }]}>
+                  <TrendingUp size={20} color="#059669" />
+                </View>
+                <Text style={styles.statLabel}>Total</Text>
+                <Text style={styles.statValue}>
+                  {todayTotal.toLocaleString('en-KE', {
+                    style: 'currency',
+                    currency: 'KES',
+                    minimumFractionDigits: 0,
+                  })}
+                </Text>
               </View>
-              <View style={styles.infoItem}>
-                <Text style={styles.infoLabel}>Most Used</Text>
-                <Text style={styles.infoValue}>Cash</Text>
+
+              <View style={styles.statItem}>
+                <View style={[styles.statIcon, { backgroundColor: '#fef3c7' }]}>
+                  <Clock size={20} color="#d97706" />
+                </View>
+                <Text style={styles.statLabel}>Most Used</Text>
+                <Text style={[styles.statValue, { fontSize: 14 }]}>
+                  {mostUsed}
+                </Text>
               </View>
             </View>
           </View>
+
+          {/* Recent Transactions Preview */}
+          {recentTransactions.length > 0 && (
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <Text style={styles.cardTitle}>Recent Transactions</Text>
+                <TouchableOpacity
+                  style={styles.viewAllButton}
+                  onPress={handleViewAll}
+                >
+                  <Text style={styles.viewAllText}>View All</Text>
+                  <ExternalLink size={14} color="#3b82f6" />
+                </TouchableOpacity>
+              </View>
+              {recentTransactions.map((transaction, index) => (
+                <TouchableOpacity
+                  key={index}
+                  style={styles.transactionItem}
+                  onPress={() => handleTransactionPress(transaction)}
+                >
+                  <View style={styles.transactionLeft}>
+                    <View
+                      style={[
+                        styles.transactionIcon,
+                        {
+                          backgroundColor:
+                            (transaction.amount || 0) > 0
+                              ? '#dcfce7'
+                              : '#fee2e2',
+                        },
+                      ]}
+                    >
+                      {(transaction.amount || 0) > 0 ? (
+                        <TrendingUp size={16} color="#059669" />
+                      ) : (
+                        <TrendingUp
+                          size={16}
+                          color="#dc2626"
+                          style={{ transform: [{ rotate: '90deg' }] }}
+                        />
+                      )}
+                    </View>
+                    <View>
+                      <Text
+                        style={styles.transactionDescription}
+                        numberOfLines={1}
+                      >
+                        {transaction.description ||
+                          `${transaction.paymentType || 'Unknown'} Transaction`}
+                      </Text>
+                      <Text style={styles.transactionDate}>
+                        {transaction.createdAt
+                          ? new Date(transaction.createdAt).toLocaleDateString(
+                              'en-KE',
+                              {
+                                day: 'numeric',
+                                month: 'short',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              }
+                            )
+                          : 'Unknown date'}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text
+                    style={[
+                      styles.transactionAmount,
+                      (transaction.amount || 0) > 0
+                        ? styles.positiveAmount
+                        : styles.negativeAmount,
+                    ]}
+                  >
+                    {(transaction.amount || 0) > 0 ? '+' : ''}
+                    {(transaction.amount || 0).toLocaleString('en-KE', {
+                      style: 'currency',
+                      currency: 'KES',
+                      minimumFractionDigits: 2,
+                    })}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
 
           {/* Submit Button */}
           <TouchableOpacity
             style={[
               styles.submitButton,
-              loading && styles.submitButtonDisabled,
-              !amount && styles.submitButtonDisabled,
+              (isSubmitting || !amount) && styles.submitButtonDisabled,
             ]}
             onPress={handleSubmit}
-            disabled={loading || !amount}
+            disabled={isSubmitting || !amount}
           >
             <LinearGradient
               colors={['#10b981', '#059669']}
@@ -245,7 +473,7 @@ export default function CashEntryScreen() {
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 0 }}
             />
-            {loading ? (
+            {isSubmitting ? (
               <ActivityIndicator color="#ffffff" />
             ) : (
               <>
@@ -255,14 +483,19 @@ export default function CashEntryScreen() {
             )}
           </TouchableOpacity>
 
-          {/* Help Text */}
-          <View style={styles.helpCard}>
-            <Text style={styles.helpTitle}>💡 Quick Tips</Text>
-            <Text style={styles.helpText}>
-              • Record all cash inflows and outflows{'\n'}• Use descriptions for
-              better tracking{'\n'}• Select the correct payment method{'\n'}•
-              Review entries in the transactions history
-            </Text>
+          {/* Quick Actions */}
+          <View style={styles.quickActions}>
+            <TouchableOpacity
+              style={styles.quickActionButton}
+              onPress={handleViewAll}
+            >
+              <View
+                style={[styles.quickActionIcon, { backgroundColor: '#3b82f6' }]}
+              >
+                <List size={24} color="#ffffff" />
+              </View>
+              <Text style={styles.quickActionText}>View All Transactions</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </ScrollView>
@@ -302,6 +535,19 @@ const styles = StyleSheet.create({
   headerSubtitle: {
     fontSize: 14,
     color: 'rgba(255, 255, 255, 0.9)',
+    marginBottom: 8,
+  },
+  refreshButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 20,
+    marginTop: 8,
+  },
+  refreshText: {
+    fontSize: 12,
+    color: '#ffffff',
+    fontWeight: '600',
   },
   content: {
     padding: 16,
@@ -323,11 +569,30 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#f1f5f9',
   },
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
   cardTitle: {
     fontSize: 20,
     fontWeight: '700',
     color: '#1e293b',
-    marginBottom: 20,
+  },
+  viewAllButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: '#eff6ff',
+    borderRadius: 12,
+  },
+  viewAllText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#3b82f6',
   },
   inputContainer: {
     marginBottom: 24,
@@ -443,25 +708,74 @@ const styles = StyleSheet.create({
     textAlign: 'right',
     marginTop: 6,
   },
-  infoGrid: {
+  statsGrid: {
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
-  infoItem: {
+  statItem: {
     alignItems: 'center',
     flex: 1,
   },
-  infoLabel: {
+  statIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  statLabel: {
     fontSize: 12,
     color: '#64748b',
     marginBottom: 4,
-    textAlign: 'center',
   },
-  infoValue: {
+  statValue: {
     fontSize: 18,
     fontWeight: '700',
     color: '#1e293b',
-    textAlign: 'center',
+  },
+  transactionItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  transactionLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  transactionIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  transactionDescription: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1e293b',
+    marginBottom: 2,
+    maxWidth: 200,
+  },
+  transactionDate: {
+    fontSize: 12,
+    color: '#64748b',
+  },
+  transactionAmount: {
+    fontSize: 16,
+    fontWeight: '700',
+    marginLeft: 12,
+  },
+  positiveAmount: {
+    color: '#059669',
+  },
+  negativeAmount: {
+    color: '#dc2626',
   },
   submitButton: {
     flexDirection: 'row',
@@ -470,7 +784,7 @@ const styles = StyleSheet.create({
     gap: 12,
     paddingVertical: 20,
     borderRadius: 16,
-    marginBottom: 20,
+    marginBottom: 16,
     shadowColor: '#10b981',
     shadowOffset: {
       width: 0,
@@ -490,22 +804,31 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
   },
-  helpCard: {
-    backgroundColor: '#f0f9ff',
-    borderRadius: 16,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: '#e0f2fe',
+  quickActions: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginBottom: 20,
   },
-  helpTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#0369a1',
+  quickActionButton: {
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 16,
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  quickActionIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 8,
   },
-  helpText: {
+  quickActionText: {
     fontSize: 14,
-    color: '#0c4a6e',
-    lineHeight: 22,
+    fontWeight: '600',
+    color: '#3b82f6',
   },
 });

@@ -5,7 +5,7 @@ import { router } from 'expo-router';
 
 const API_URL = 'http://192.168.100.105:5000/api';
 
-console.log(API_URL, 'api');
+// console.log(API_URL, 'api');
 
 const AuthContext = createContext(null);
 
@@ -58,11 +58,11 @@ export const AuthProvider = ({ children }) => {
         }),
       });
 
-      console.log(response);
+      // console.log(response);
 
       const result = await response.json();
 
-      console.log(await response, 'in auth contex');
+      // console.log(await response, 'in auth contex');
 
       if (!response.ok) {
         throw new Error(result.message || 'Registration failed');
@@ -133,14 +133,24 @@ export const AuthProvider = ({ children }) => {
 
       const data = await response.json();
 
+      // console.log(data, 'data token');
+
       if (!response.ok) {
         throw new Error(data.message || 'Login failed');
       }
 
       // Save token and user data
-      await AsyncStorage.setItem('auth_token', data.token);
-      await AsyncStorage.setItem('auth_user', JSON.stringify(data.user));
-      await AsyncStorage.removeItem('demo_mode'); // Clear demo mode if exists
+      const token = data?.data?.token;
+      const user = data?.data?.user;
+
+      if (!token) {
+        Alert.alert('Login failed', 'Token not returned from server');
+        return;
+      }
+
+      await AsyncStorage.setItem('auth_token', token);
+      await AsyncStorage.setItem('auth_user', JSON.stringify(user));
+      // Clear demo mode if exists
 
       setToken(data.token);
       setUser(data.user);
