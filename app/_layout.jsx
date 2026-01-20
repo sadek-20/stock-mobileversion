@@ -124,8 +124,7 @@ function RootLayoutNav() {
         name="TransactionHistory"
         options={{
           animation: 'slide_from_right',
-          headerShown: true,
-          title: 'Transaction History',
+          headerShown: false,
           headerStyle: { backgroundColor: '#ffffff' },
           headerTitleStyle: {
             fontSize: 18,

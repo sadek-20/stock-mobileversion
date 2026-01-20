@@ -33,12 +33,14 @@ export const CashProvider = ({ children }) => {
         headers: authHeaders(),
       });
 
+      //   console.log(res, 'in context');
       const data = await res.json();
+      //   console.log(data, 'inghjkhl;j');
 
       if (!res.ok) throw new Error(data.message);
 
-      setBalance(data.balance);
-      setTransactions(data.transactions);
+      setBalance(data.totalAmount);
+      setTransactions(data);
 
       return data;
     } catch (err) {

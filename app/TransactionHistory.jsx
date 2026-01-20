@@ -3,23 +3,26 @@ import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
   TouchableOpacity,
-  RefreshControl,
   TextInput,
   Modal,
   Alert,
   ActivityIndicator,
   FlatList,
-  RefreshControl as RC,
+  SafeAreaView,
+  StatusBar,
+  ScrollView,
+  Dimensions,
+  Animated,
+  RefreshControl,
 } from 'react-native';
 import {
-  ArrowLeft,
   Search,
   Filter,
   Calendar,
   Download,
   TrendingUp,
+  TrendingDown,
   Banknote,
   Smartphone,
   CreditCard,
@@ -27,15 +30,21 @@ import {
   Info,
   ChevronLeft,
   Check,
+  BarChart3,
+  Wallet,
+  Clock,
+  Hash,
 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useCash } from '../contexts/CashContext';
 import { useNavigation } from '@react-navigation/native';
 
+const { width, height } = Dimensions.get('window');
+
 export default function TransactionHistoryScreen() {
   const navigation = useNavigation();
   const {
-    transactions = [],
+    transactions = {},
     balance = 0,
     fetchCash,
     loading = false,
@@ -45,52 +54,74 @@ export default function TransactionHistoryScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [filteredTransactions, setFilteredTransactions] = useState([]);
   const [filterModalVisible, setFilterModalVisible] = useState(false);
+  const [statsModalVisible, setStatsModalVisible] = useState(false);
   const [selectedFilters, setSelectedFilters] = useState({
     paymentType: 'all',
     dateRange: 'all',
     transactionType: 'all',
   });
-  const [sortOrder, setSortOrder] = useState('newest');
+  // removed sortOrder UI — always sort by newest
   const [isDownloading, setIsDownloading] = useState(false);
+  const [selectedTransaction, setSelectedTransaction] = useState(null);
+  const [detailModalVisible, setDetailModalVisible] = useState(false);
+  const [fadeAnim] = useState(new Animated.Value(0));
+
+  // Initialize with fade animation
+  useEffect(() => {
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 500,
+      useNativeDriver: true,
+    }).start();
+  }, []);
 
   // Initialize filtered transactions
   useEffect(() => {
-    setFilteredTransactions(transactions);
+    const sourceData = transactions?.data || transactions || [];
+    const sourceArray = Array.isArray(sourceData) ? sourceData : [];
+    setFilteredTransactions(sourceArray);
   }, [transactions]);
 
   // Filter and sort transactions
   useEffect(() => {
-    if (!Array.isArray(transactions)) return;
-
-    let result = [...transactions];
+    const sourceData = transactions?.data || transactions || [];
+    let sourceArray = Array.isArray(sourceData) ? [...sourceData] : [];
 
     // Apply search filter
-    if (searchQuery.trim()) {
-      result = result.filter(
+    if (searchQuery?.trim()) {
+      sourceArray = sourceArray.filter(
         (transaction) =>
-          (transaction.description?.toLowerCase() || '').includes(
-            searchQuery.toLowerCase()
-          ) ||
-          (transaction.paymentType?.toLowerCase() || '').includes(
-            searchQuery.toLowerCase()
-          )
+          transaction?.description
+            ?.toLowerCase()
+            ?.includes(searchQuery.toLowerCase()) ||
+          transaction?.paymentType
+            ?.toLowerCase()
+            ?.includes(searchQuery.toLowerCase()) ||
+          transaction?.notes?.toLowerCase()?.includes(searchQuery.toLowerCase())
       );
     }
 
     // Apply payment type filter
     if (selectedFilters.paymentType !== 'all') {
-      result = result.filter(
-        (transaction) => transaction.paymentType === selectedFilters.paymentType
-      );
+      sourceArray = sourceArray.filter((transaction) => {
+        const transactionType = transaction?.paymentType || '';
+        const filterType = selectedFilters.paymentType;
+        return (
+          transactionType.toLowerCase() === filterType.toLowerCase() ||
+          transactionType.toLowerCase().replace('-', '') ===
+            filterType.toLowerCase()
+        );
+      });
     }
 
     // Apply transaction type filter
     if (selectedFilters.transactionType !== 'all') {
-      result = result.filter((transaction) =>
-        selectedFilters.transactionType === 'income'
-          ? (transaction.amount || 0) > 0
-          : (transaction.amount || 0) < 0
-      );
+      sourceArray = sourceArray.filter((transaction) => {
+        const amount = transaction?.amount || 0;
+        return selectedFilters.transactionType === 'income'
+          ? amount > 0
+          : amount < 0;
+      });
     }
 
     // Apply date range filter
@@ -108,38 +139,27 @@ export default function TransactionHistoryScreen() {
         case 'month':
           filterDate.setMonth(filterDate.getMonth() - 1);
           break;
+        case 'year':
+          filterDate.setFullYear(filterDate.getFullYear() - 1);
+          break;
       }
 
-      result = result.filter((transaction) => {
-        if (!transaction.createdAt) return false;
+      sourceArray = sourceArray.filter((transaction) => {
+        if (!transaction?.createdAt) return false;
         const transactionDate = new Date(transaction.createdAt);
         return transactionDate >= filterDate;
       });
     }
 
-    // Apply sorting
-    result.sort((a, b) => {
-      const dateA = new Date(a.createdAt || 0);
-      const dateB = new Date(b.createdAt || 0);
-      const amountA = Math.abs(a.amount || 0);
-      const amountB = Math.abs(b.amount || 0);
-
-      switch (sortOrder) {
-        case 'newest':
-          return dateB - dateA;
-        case 'oldest':
-          return dateA - dateB;
-        case 'highest':
-          return amountB - amountA;
-        case 'lowest':
-          return amountA - amountB;
-        default:
-          return 0;
-      }
+    // Always sort by newest (date descending)
+    sourceArray.sort((a, b) => {
+      const dateA = new Date(a?.createdAt || 0);
+      const dateB = new Date(b?.createdAt || 0);
+      return dateB - dateA;
     });
 
-    setFilteredTransactions(result);
-  }, [transactions, searchQuery, selectedFilters, sortOrder]);
+    setFilteredTransactions(sourceArray);
+  }, [transactions, searchQuery, selectedFilters]);
 
   const onRefresh = async () => {
     if (!fetchCash) return;
@@ -155,307 +175,363 @@ export default function TransactionHistoryScreen() {
     }
   };
 
-  const handleBack = () => {
-    if (navigation) {
-      navigation.goBack();
+  const calculateStats = () => {
+    if (!Array.isArray(filteredTransactions)) {
+      return {
+        totalIncome: 0,
+        totalExpense: 0,
+        totalTransactions: 0,
+        averageTransaction: 0,
+        highestTransaction: 0,
+        cashCount: 0,
+        mpesaCount: 0,
+        cardCount: 0,
+      };
     }
-  };
 
-  const handleDownload = async () => {
-    if (isDownloading) return;
-
-    setIsDownloading(true);
-    try {
-      // Simulate download process
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-
-      // Prepare data for download
-      const exportData = filteredTransactions.map((t) => ({
-        Amount: t.amount || 0,
-        Type: t.amount > 0 ? 'Income' : 'Expense',
-        'Payment Method': t.paymentType || 'Unknown',
-        Description: t.description || '',
-        Date: new Date(t.createdAt).toLocaleString(),
-        Notes: t.notes || '',
-      }));
-
-      // In a real app, you would save this as CSV or PDF
-      Alert.alert(
-        'Export Ready',
-        `Exported ${exportData.length} transactions.\n\n(In a real app, this would download a CSV file)`,
-        [{ text: 'OK' }]
-      );
-    } catch (error) {
-      Alert.alert('Export Failed', 'Failed to export transactions');
-      console.error('Export error:', error);
-    } finally {
-      setIsDownloading(false);
-    }
-  };
-
-  const getPaymentIcon = (type) => {
-    switch (type) {
-      case 'Cash':
-        return Banknote;
-      case 'M-Pesa':
-        return Smartphone;
-      case 'Card':
-        return CreditCard;
-      default:
-        return Banknote;
-    }
-  };
-
-  const getPaymentColor = (type) => {
-    switch (type) {
-      case 'Cash':
-        return '#10b981';
-      case 'M-Pesa':
-        return '#06b6d4';
-      case 'Card':
-        return '#8b5cf6';
-      default:
-        return '#64748b';
-    }
-  };
-
-  const calculateSummary = () => {
     let totalIncome = 0;
     let totalExpense = 0;
+    let cashCount = 0;
+    let mpesaCount = 0;
+    let cardCount = 0;
+    let highestTransaction = 0;
 
     filteredTransactions.forEach((transaction) => {
-      const amount = transaction.amount || 0;
+      const amount = transaction?.amount || 0;
+      const paymentType = transaction?.paymentType?.toLowerCase() || '';
+
       if (amount > 0) {
         totalIncome += amount;
       } else {
         totalExpense += Math.abs(amount);
       }
+
+      if (Math.abs(amount) > highestTransaction) {
+        highestTransaction = Math.abs(amount);
+      }
+
+      if (paymentType.includes('cash')) cashCount++;
+      else if (paymentType.includes('mpesa') || paymentType.includes('pesa'))
+        mpesaCount++;
+      else if (paymentType.includes('card')) cardCount++;
     });
 
-    return { totalIncome, totalExpense };
+    const totalTransactions = filteredTransactions.length;
+    const averageTransaction =
+      totalTransactions > 0
+        ? (totalIncome + totalExpense) / totalTransactions
+        : 0;
+
+    return {
+      totalIncome,
+      totalExpense,
+      totalTransactions,
+      averageTransaction,
+      highestTransaction,
+      cashCount,
+      mpesaCount,
+      cardCount,
+    };
   };
 
-  const { totalIncome, totalExpense } = calculateSummary();
+  const stats = calculateStats();
+
+  const getPaymentIcon = (type) => {
+    if (!type) return Banknote;
+    const typeLower = type.toLowerCase();
+    if (typeLower.includes('cash')) return Banknote;
+    if (typeLower.includes('mpesa') || typeLower.includes('pesa'))
+      return Smartphone;
+    if (typeLower.includes('card')) return CreditCard;
+    return Banknote;
+  };
+
+  const getPaymentColor = (type) => {
+    if (!type) return '#64748b';
+    const typeLower = type.toLowerCase();
+    if (typeLower.includes('cash')) return '#10b981';
+    if (typeLower.includes('mpesa') || typeLower.includes('pesa'))
+      return '#06b6d4';
+    if (typeLower.includes('card')) return '#8b5cf6';
+    return '#64748b';
+  };
+
+  const formatCurrency = (amount) => {
+    return (amount || 0).toLocaleString('en-KE', {
+      style: 'currency',
+      currency: 'KES',
+      minimumFractionDigits: 0,
+    });
+  };
+
+  const formatDetailedCurrency = (amount) => {
+    return (amount || 0).toLocaleString('en-KE', {
+      style: 'currency',
+      currency: 'KES',
+      minimumFractionDigits: 2,
+    });
+  };
 
   const formatDate = (dateString) => {
     if (!dateString) return 'Unknown date';
     try {
       const date = new Date(dateString);
-      return date.toLocaleDateString('en-KE', {
-        day: 'numeric',
-        month: 'short',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
+      const now = new Date();
+      const diffTime = Math.abs(now - date);
+      const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+
+      if (diffDays === 0) {
+        return (
+          'Today, ' +
+          date.toLocaleTimeString('en-KE', {
+            hour: '2-digit',
+            minute: '2-digit',
+          })
+        );
+      } else if (diffDays === 1) {
+        return (
+          'Yesterday, ' +
+          date.toLocaleTimeString('en-KE', {
+            hour: '2-digit',
+            minute: '2-digit',
+          })
+        );
+      } else if (diffDays < 7) {
+        return date.toLocaleDateString('en-KE', {
+          weekday: 'short',
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+      } else {
+        return date.toLocaleDateString('en-KE', {
+          day: 'numeric',
+          month: 'short',
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+      }
     } catch (error) {
       return 'Invalid date';
     }
   };
 
   const renderTransactionItem = ({ item, index }) => {
-    const Icon = getPaymentIcon(item.paymentType);
-    const iconColor = getPaymentColor(item.paymentType);
-    const isIncome = (item.amount || 0) > 0;
+    const Icon = getPaymentIcon(item?.paymentType);
+    const iconColor = getPaymentColor(item?.paymentType);
+    const amount = item?.amount || 0;
+    const isIncome = amount > 0;
+    const paymentType = item?.paymentType || 'Unknown';
+    const description = item?.description || `${paymentType} Transaction`;
 
     return (
-      <TouchableOpacity
-        style={styles.transactionCard}
-        onPress={() => {
-          Alert.alert(
-            'Transaction Details',
-            `Amount: ${(item.amount || 0).toLocaleString('en-KE', {
-              style: 'currency',
-              currency: 'KES',
-              minimumFractionDigits: 2,
-            })}\n\nType: ${item.paymentType || 'Unknown'}\n\nDescription: ${
-              item.description || 'No description'
-            }\n\nDate: ${formatDate(item.createdAt)}\n\n${
-              item.notes ? `Notes: ${item.notes}` : ''
-            }`,
-            [{ text: 'OK' }]
-          );
-        }}
-        activeOpacity={0.7}
+      <Animated.View
+        style={[
+          styles.transactionCard,
+          {
+            opacity: fadeAnim,
+            transform: [
+              {
+                translateY: fadeAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [20, 0],
+                }),
+              },
+            ],
+          },
+        ]}
       >
-        <View style={styles.transactionHeader}>
+        <TouchableOpacity
+          style={styles.transactionContent}
+          onPress={() => {
+            setSelectedTransaction(item);
+            setDetailModalVisible(true);
+          }}
+          activeOpacity={0.7}
+        >
           <View style={styles.transactionLeft}>
             <View
               style={[
-                styles.transactionIcon,
-                { backgroundColor: isIncome ? '#dcfce7' : '#fee2e2' },
+                styles.transactionIconContainer,
+                { backgroundColor: isIncome ? '#dcfce710' : '#fee2e210' },
               ]}
             >
-              <Icon size={18} color={iconColor} />
+              <View
+                style={[
+                  styles.transactionIcon,
+                  { backgroundColor: iconColor + '20' },
+                ]}
+              >
+                <Icon size={20} color={iconColor} />
+              </View>
             </View>
-            <View style={styles.transactionInfo}>
+            <View style={styles.transactionDetails}>
               <Text style={styles.transactionDescription} numberOfLines={1}>
-                {item.description ||
-                  `${item.paymentType || 'Unknown'} Transaction`}
+                {description}
               </Text>
               <View style={styles.transactionMeta}>
-                <Text style={styles.transactionDate}>
-                  {formatDate(item.createdAt)}
-                </Text>
+                <View style={styles.transactionMetaItem}>
+                  <Clock size={12} color="#94a3b8" />
+                  <Text style={styles.transactionDate}>
+                    {formatDate(item?.createdAt)}
+                  </Text>
+                </View>
                 <View
                   style={[
                     styles.paymentTypeBadge,
-                    { backgroundColor: `${iconColor}20` },
+                    { backgroundColor: iconColor + '10' },
                   ]}
                 >
                   <Text style={[styles.paymentTypeText, { color: iconColor }]}>
-                    {item.paymentType || 'Unknown'}
+                    {paymentType}
                   </Text>
                 </View>
               </View>
             </View>
           </View>
-          <Text
-            style={[
-              styles.transactionAmount,
-              isIncome ? styles.positiveAmount : styles.negativeAmount,
-            ]}
-          >
-            {isIncome ? '+' : '-'}
-            {Math.abs(item.amount || 0).toLocaleString('en-KE', {
-              style: 'currency',
-              currency: 'KES',
-              minimumFractionDigits: 2,
-            })}
-          </Text>
-        </View>
-        {item.notes && (
-          <View style={styles.notesContainer}>
-            <Info size={14} color="#64748b" />
-            <Text style={styles.notesText} numberOfLines={2}>
+          <View style={styles.transactionRight}>
+            <Text
+              style={[
+                styles.transactionAmount,
+                isIncome ? styles.positiveAmount : styles.negativeAmount,
+              ]}
+            >
+              {isIncome ? '+' : '-'}
+              {formatCurrency(Math.abs(amount))}
+            </Text>
+            <View style={styles.transactionStatus}>
+              <View
+                style={[
+                  styles.statusDot,
+                  { backgroundColor: isIncome ? '#10b981' : '#ef4444' },
+                ]}
+              />
+              <Text style={styles.statusText}>
+                {isIncome ? 'Income' : 'Expense'}
+              </Text>
+            </View>
+          </View>
+        </TouchableOpacity>
+        {item?.notes && (
+          <View style={styles.notesPreview}>
+            <Info size={14} color="#94a3b8" />
+            <Text style={styles.notesPreviewText} numberOfLines={1}>
               {item.notes}
             </Text>
           </View>
         )}
-      </TouchableOpacity>
+      </Animated.View>
     );
-  };
-
-  const clearFilters = () => {
-    setSelectedFilters({
-      paymentType: 'all',
-      dateRange: 'all',
-      transactionType: 'all',
-    });
-    setSearchQuery('');
-    setSortOrder('newest');
-  };
-
-  const handleApplyFilters = () => {
-    setFilterModalVisible(false);
   };
 
   const renderEmptyState = () => (
     <View style={styles.emptyState}>
-      <Calendar size={64} color="#cbd5e1" />
-      <Text style={styles.emptyStateTitle}>No transactions found</Text>
+      <View style={styles.emptyStateIcon}>
+        <Wallet size={80} color="#cbd5e1" />
+      </View>
+      <Text style={styles.emptyStateTitle}>No transactions yet</Text>
       <Text style={styles.emptyStateText}>
         {searchQuery ||
         selectedFilters.paymentType !== 'all' ||
         selectedFilters.dateRange !== 'all'
-          ? 'Try adjusting your search or filters'
-          : 'Start by recording your first transaction in the Cash Entry screen'}
+          ? 'No transactions match your search criteria'
+          : 'Start recording your financial transactions to see them here'}
       </Text>
       {(searchQuery ||
         selectedFilters.paymentType !== 'all' ||
         selectedFilters.dateRange !== 'all') && (
         <TouchableOpacity
           style={styles.emptyStateButton}
-          onPress={clearFilters}
+          onPress={() => {
+            setSearchQuery('');
+            setSelectedFilters({
+              paymentType: 'all',
+              dateRange: 'all',
+              transactionType: 'all',
+            });
+          }}
         >
-          <Text style={styles.emptyStateButtonText}>Clear All Filters</Text>
+          <Text style={styles.emptyStateButtonText}>Clear Filters</Text>
         </TouchableOpacity>
       )}
     </View>
   );
 
-  const handleFilterChange = (filterType, value) => {
-    setSelectedFilters((prev) => ({
-      ...prev,
-      [filterType]: value,
-    }));
-  };
-
-  return (
-    <View style={styles.container}>
+  const renderListHeader = () => (
+    <Animated.View style={[styles.content, { opacity: fadeAnim }]}>
       {/* Header */}
-      <LinearGradient colors={['#3b82f6', '#2563eb']} style={styles.header}>
-        <View style={styles.headerTop}>
-          <TouchableOpacity style={styles.backButton} onPress={handleBack}>
-            <ChevronLeft size={24} color="#ffffff" />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Transaction History</Text>
-          <TouchableOpacity
-            style={[
-              styles.downloadButton,
-              isDownloading && styles.downloadButtonDisabled,
-            ]}
-            onPress={handleDownload}
-            disabled={isDownloading}
-          >
-            {isDownloading ? (
-              <ActivityIndicator size="small" color="#ffffff" />
-            ) : (
-              <Download size={22} color="#ffffff" />
-            )}
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.balanceCard}>
-          <Text style={styles.balanceLabel}>Current Balance</Text>
-          <Text style={styles.balanceAmount}>
-            {(balance || 0).toLocaleString('en-KE', {
-              style: 'currency',
-              currency: 'KES',
-              minimumFractionDigits: 2,
-            })}
-          </Text>
-          <View style={styles.summaryRow}>
-            <View style={styles.summaryItem}>
-              <TrendingUp size={16} color="#059669" />
-              <Text style={[styles.summaryText, styles.positiveText]}>
-                +
-                {totalIncome.toLocaleString('en-KE', {
-                  style: 'currency',
-                  currency: 'KES',
-                  minimumFractionDigits: 0,
-                })}
-              </Text>
+      <LinearGradient
+        colors={['#3b82f6', '#2563eb']}
+        style={styles.header}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 0 }}
+      >
+        <View style={styles.headerContent}>
+          <View style={styles.headerTop}>
+            <TouchableOpacity
+              style={styles.backButton}
+              onPress={() => navigation.goBack()}
+            >
+              <ChevronLeft size={24} color="#ffffff" />
+            </TouchableOpacity>
+            <Text style={styles.headerTitle}>Transaction History</Text>
+            <View style={styles.headerActions}>
+              <TouchableOpacity
+                style={styles.headerActionButton}
+                onPress={() => setStatsModalVisible(true)}
+              >
+                <BarChart3 size={22} color="#ffffff" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.headerActionButton}
+                onPress={() => {}}
+                disabled={isDownloading}
+              >
+                {isDownloading ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <Download size={22} color="#ffffff" />
+                )}
+              </TouchableOpacity>
             </View>
-            <View style={styles.summaryItem}>
-              <TrendingUp
-                size={16}
-                color="#dc2626"
-                style={{ transform: [{ rotate: '90deg' }] }}
-              />
-              <Text style={[styles.summaryText, styles.negativeText]}>
-                -
-                {totalExpense.toLocaleString('en-KE', {
-                  style: 'currency',
-                  currency: 'KES',
-                  minimumFractionDigits: 0,
-                })}
-              </Text>
+          </View>
+
+          <View style={styles.balanceCard}>
+            <View style={styles.balanceHeader}>
+              <Text style={styles.balanceLabel}>Current Balance</Text>
+              <Wallet size={20} color="#ffffff" />
+            </View>
+            <Text style={styles.balanceAmount}>
+              {formatDetailedCurrency(balance)}
+            </Text>
+            <View style={styles.summaryRow}>
+              <View style={styles.summaryItem}>
+                <TrendingUp size={16} color="#86efac" />
+                <Text style={styles.positiveText}>
+                  {formatCurrency(stats.totalIncome)}
+                </Text>
+              </View>
+              <View style={styles.divider} />
+              <View style={styles.summaryItem}>
+                <TrendingDown size={16} color="#fca5a5" />
+                <Text style={styles.negativeText}>
+                  {formatCurrency(stats.totalExpense)}
+                </Text>
+              </View>
             </View>
           </View>
         </View>
       </LinearGradient>
 
-      {/* Search and Filter Bar */}
-      <View style={styles.searchBar}>
+      {/* Search Bar */}
+      <View style={styles.searchSection}>
         <View style={styles.searchContainer}>
           <Search size={20} color="#64748b" />
           <TextInput
             style={styles.searchInput}
             placeholder="Search transactions..."
+            placeholderTextColor="#94a3b8"
             value={searchQuery}
             onChangeText={setSearchQuery}
-            placeholderTextColor="#94a3b8"
             returnKeyType="search"
           />
           {searchQuery ? (
@@ -469,526 +545,582 @@ export default function TransactionHistoryScreen() {
           onPress={() => setFilterModalVisible(true)}
         >
           <Filter size={20} color="#3b82f6" />
+          {(selectedFilters.paymentType !== 'all' ||
+            selectedFilters.dateRange !== 'all' ||
+            selectedFilters.transactionType !== 'all') && (
+            <View style={styles.filterBadge} />
+          )}
         </TouchableOpacity>
       </View>
 
-      {/* Sort Options */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.sortContainer}
-        contentContainerStyle={styles.sortContent}
-      >
-        {['newest', 'oldest', 'highest', 'lowest'].map((sort) => (
-          <TouchableOpacity
-            key={sort}
-            style={[
-              styles.sortButton,
-              sortOrder === sort && styles.sortButtonActive,
-            ]}
-            onPress={() => setSortOrder(sort)}
-          >
-            <Text
-              style={[
-                styles.sortButtonText,
-                sortOrder === sort && styles.sortButtonTextActive,
-              ]}
-            >
-              {sort.charAt(0).toUpperCase() + sort.slice(1)}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-
-      {/* Active Filters */}
-      {(selectedFilters.paymentType !== 'all' ||
-        selectedFilters.dateRange !== 'all' ||
-        selectedFilters.transactionType !== 'all' ||
-        searchQuery) && (
-        <View style={styles.activeFilters}>
-          <Text style={styles.activeFiltersTitle}>Active Filters:</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            <View style={styles.filterChips}>
-              {selectedFilters.paymentType !== 'all' && (
-                <View style={styles.filterChip}>
-                  <Text style={styles.filterChipText}>
-                    Payment: {selectedFilters.paymentType}
-                  </Text>
-                  <TouchableOpacity
-                    onPress={() => handleFilterChange('paymentType', 'all')}
-                  >
-                    <X size={14} color="#64748b" />
-                  </TouchableOpacity>
-                </View>
-              )}
-              {selectedFilters.dateRange !== 'all' && (
-                <View style={styles.filterChip}>
-                  <Text style={styles.filterChipText}>
-                    Date: {selectedFilters.dateRange}
-                  </Text>
-                  <TouchableOpacity
-                    onPress={() => handleFilterChange('dateRange', 'all')}
-                  >
-                    <X size={14} color="#64748b" />
-                  </TouchableOpacity>
-                </View>
-              )}
-              {selectedFilters.transactionType !== 'all' && (
-                <View style={styles.filterChip}>
-                  <Text style={styles.filterChipText}>
-                    Type: {selectedFilters.transactionType}
-                  </Text>
-                  <TouchableOpacity
-                    onPress={() => handleFilterChange('transactionType', 'all')}
-                  >
-                    <X size={14} color="#64748b" />
-                  </TouchableOpacity>
-                </View>
-              )}
-              {searchQuery && (
-                <View style={styles.filterChip}>
-                  <Text style={styles.filterChipText}>
-                    Search: "{searchQuery}"
-                  </Text>
-                  <TouchableOpacity onPress={() => setSearchQuery('')}>
-                    <X size={14} color="#64748b" />
-                  </TouchableOpacity>
-                </View>
-              )}
-              <TouchableOpacity
-                style={styles.clearAllButton}
-                onPress={clearFilters}
-              >
-                <Text style={styles.clearAllText}>Clear All</Text>
-              </TouchableOpacity>
-            </View>
-          </ScrollView>
+      {/* Quick Stats */}
+      <View style={styles.quickStats}>
+        <View style={styles.statCard}>
+          <Text style={styles.statValue}>{stats.totalTransactions}</Text>
+          <Text style={styles.statLabel}>Total</Text>
         </View>
-      )}
-
-      {/* Transaction Count */}
-      <View style={styles.transactionCount}>
-        <Text style={styles.transactionCountText}>
-          {filteredTransactions.length} transaction
-          {filteredTransactions.length !== 1 ? 's' : ''}
-        </Text>
+        <View style={[styles.statCard, styles.statCardIncome]}>
+          <Text style={[styles.statValue, styles.statValueIncome]}>
+            {formatCurrency(stats.totalIncome)}
+          </Text>
+          <Text style={styles.statLabel}>Income</Text>
+        </View>
+        <View style={[styles.statCard, styles.statCardExpense]}>
+          <Text style={[styles.statValue, styles.statValueExpense]}>
+            {formatCurrency(stats.totalExpense)}
+          </Text>
+          <Text style={styles.statLabel}>Expense</Text>
+        </View>
       </View>
 
-      {/* Transactions List */}
-      {loading && !refreshing ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#3b82f6" />
-          <Text style={styles.loadingText}>Loading transactions...</Text>
-        </View>
-      ) : filteredTransactions.length === 0 ? (
-        renderEmptyState()
-      ) : (
-        <FlatList
-          data={filteredTransactions}
-          renderItem={renderTransactionItem}
-          keyExtractor={(item, index) =>
-            `${item.id || index}-${item.createdAt || Date.now()}`
-          }
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.listContent}
-          refreshControl={
-            <RC
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              colors={['#3b82f6']}
-              tintColor="#3b82f6"
-            />
-          }
-        />
-      )}
+      {/* List header */}
+      <View style={styles.listHeader}>
+        <Text style={styles.listTitle}>Recent Transactions</Text>
+        <Text style={styles.listCount}>
+          {filteredTransactions.length} transactions
+        </Text>
+      </View>
+    </Animated.View>
+  );
 
-      {/* Filter Modal */}
+  const renderListEmpty = () =>
+    loading && !refreshing ? (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#3b82f6" />
+        <Text style={styles.loadingText}>Loading transactions...</Text>
+      </View>
+    ) : (
+      renderEmptyState()
+    );
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor="#3b82f6" />
+      <FlatList
+        data={filteredTransactions}
+        renderItem={renderTransactionItem}
+        keyExtractor={(item, index) =>
+          item?._id || item?.id || `transaction-${index}`
+        }
+        ListHeaderComponent={renderListHeader}
+        ListHeaderComponentStyle={{ backgroundColor: '#ffffff' }}
+        ListEmptyComponent={renderListEmpty}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.listContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={['#3b82f6']}
+            tintColor="#3b82f6"
+          />
+        }
+      />
+
+      {/* Transaction Detail Modal */}
       <Modal
         animationType="slide"
         transparent={true}
-        visible={filterModalVisible}
-        onRequestClose={() => setFilterModalVisible(false)}
+        visible={detailModalVisible}
+        onRequestClose={() => setDetailModalVisible(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Filter Transactions</Text>
-              <TouchableOpacity
-                onPress={() => setFilterModalVisible(false)}
-                style={styles.modalClose}
-              >
-                <X size={24} color="#64748b" />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView style={styles.filterOptions}>
-              {/* Payment Type Filter */}
-              <View style={styles.filterSection}>
-                <Text style={styles.filterSectionTitle}>Payment Type</Text>
-                {['all', 'Cash', 'M-Pesa', 'Card'].map((type) => {
-                  const Icon = getPaymentIcon(type);
-                  return (
-                    <TouchableOpacity
-                      key={type}
-                      style={styles.filterOption}
-                      onPress={() => handleFilterChange('paymentType', type)}
+        <SafeAreaView style={styles.modalContainer}>
+          <View style={styles.modalOverlay}>
+            <View style={styles.detailModal}>
+              {selectedTransaction && (
+                <>
+                  <View style={styles.detailHeader}>
+                    <View
+                      style={[
+                        styles.detailIcon,
+                        {
+                          backgroundColor:
+                            getPaymentColor(selectedTransaction.paymentType) +
+                            '20',
+                        },
+                      ]}
                     >
-                      <View style={styles.filterOptionLeft}>
-                        {type !== 'all' && (
-                          <View
-                            style={[
-                              styles.filterIcon,
-                              { backgroundColor: `${getPaymentColor(type)}20` },
-                            ]}
-                          >
-                            <Icon size={18} color={getPaymentColor(type)} />
-                          </View>
-                        )}
-                        <Text style={styles.filterOptionText}>
-                          {type === 'all' ? 'All Payment Methods' : type}
-                        </Text>
-                      </View>
-                      {selectedFilters.paymentType === type && (
-                        <Check size={20} color="#3b82f6" />
+                      {React.createElement(
+                        getPaymentIcon(selectedTransaction.paymentType),
+                        {
+                          size: 30,
+                          color: getPaymentColor(
+                            selectedTransaction.paymentType
+                          ),
+                        }
                       )}
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-
-              {/* Transaction Type Filter */}
-              <View style={styles.filterSection}>
-                <Text style={styles.filterSectionTitle}>Transaction Type</Text>
-                {['all', 'income', 'expense'].map((type) => (
-                  <TouchableOpacity
-                    key={type}
-                    style={styles.filterOption}
-                    onPress={() => handleFilterChange('transactionType', type)}
-                  >
-                    <Text style={styles.filterOptionText}>
-                      {type === 'all'
-                        ? 'All Transactions'
-                        : type === 'income'
-                        ? 'Income Only'
-                        : 'Expense Only'}
-                    </Text>
-                    {selectedFilters.transactionType === type && (
-                      <Check size={20} color="#3b82f6" />
-                    )}
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              {/* Date Range Filter */}
-              <View style={styles.filterSection}>
-                <Text style={styles.filterSectionTitle}>Date Range</Text>
-                {['all', 'today', 'week', 'month'].map((range) => (
-                  <TouchableOpacity
-                    key={range}
-                    style={styles.filterOption}
-                    onPress={() => handleFilterChange('dateRange', range)}
-                  >
-                    <View style={styles.filterOptionLeft}>
-                      <Calendar size={18} color="#64748b" />
-                      <Text style={styles.filterOptionText}>
-                        {range === 'all'
-                          ? 'All Time'
-                          : range === 'today'
-                          ? 'Today'
-                          : range === 'week'
-                          ? 'Last 7 Days'
-                          : 'Last 30 Days'}
-                      </Text>
                     </View>
-                    {selectedFilters.dateRange === range && (
-                      <Check size={20} color="#3b82f6" />
-                    )}
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </ScrollView>
+                    <Text style={styles.detailAmount}>
+                      {formatDetailedCurrency(
+                        Math.abs(selectedTransaction.amount || 0)
+                      )}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.detailType,
+                        {
+                          color:
+                            (selectedTransaction.amount || 0) > 0
+                              ? '#10b981'
+                              : '#ef4444',
+                        },
+                      ]}
+                    >
+                      {(selectedTransaction.amount || 0) > 0
+                        ? 'INCOME'
+                        : 'EXPENSE'}
+                    </Text>
+                  </View>
 
-            <View style={styles.modalActions}>
-              <TouchableOpacity
-                style={styles.modalCancel}
-                onPress={() => setFilterModalVisible(false)}
-              >
-                <Text style={styles.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.modalApply}
-                onPress={handleApplyFilters}
-              >
-                <Text style={styles.modalApplyText}>Apply Filters</Text>
-              </TouchableOpacity>
+                  <View style={styles.detailContent}>
+                    <DetailRow
+                      label="Description"
+                      value={
+                        selectedTransaction.description || 'No description'
+                      }
+                    />
+                    <DetailRow
+                      label="Payment Method"
+                      value={selectedTransaction.paymentType || 'Unknown'}
+                    />
+                    <DetailRow
+                      label="Date"
+                      value={formatDate(selectedTransaction.createdAt)}
+                    />
+                    {selectedTransaction.notes && (
+                      <DetailRow
+                        label="Notes"
+                        value={selectedTransaction.notes}
+                      />
+                    )}
+                  </View>
+
+                  <View style={styles.detailActions}>
+                    <TouchableOpacity
+                      style={styles.closeButton}
+                      onPress={() => setDetailModalVisible(false)}
+                    >
+                      <Text style={styles.closeButtonText}>Close</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
             </View>
           </View>
-        </View>
+        </SafeAreaView>
       </Modal>
-    </View>
+
+      {/* Statistics Modal */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={statsModalVisible}
+        onRequestClose={() => setStatsModalVisible(false)}
+      >
+        <SafeAreaView style={styles.modalContainer}>
+          <View style={styles.modalOverlay}>
+            <View style={styles.statsModal}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Transaction Statistics</Text>
+                <TouchableOpacity
+                  style={styles.modalCloseButton}
+                  onPress={() => setStatsModalVisible(false)}
+                >
+                  <X size={24} color="#64748b" />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView
+                style={styles.statsContent}
+                showsVerticalScrollIndicator={false}
+              >
+                <StatCard
+                  title="Total Transactions"
+                  value={stats.totalTransactions.toString()}
+                  icon={<Hash size={24} color="#3b82f6" />}
+                />
+                <StatCard
+                  title="Total Income"
+                  value={formatCurrency(stats.totalIncome)}
+                  icon={<TrendingUp size={24} color="#10b981" />}
+                />
+                <StatCard
+                  title="Total Expense"
+                  value={formatCurrency(stats.totalExpense)}
+                  icon={<TrendingDown size={24} color="#ef4444" />}
+                />
+                <StatCard
+                  title="Average Transaction"
+                  value={formatCurrency(stats.averageTransaction)}
+                  icon={<BarChart3 size={24} color="#8b5cf6" />}
+                />
+                <StatCard
+                  title="Highest Transaction"
+                  value={formatCurrency(stats.highestTransaction)}
+                  icon={<TrendingUp size={24} color="#f59e0b" />}
+                />
+
+                <Text style={styles.paymentStatsTitle}>Payment Methods</Text>
+                <View style={styles.paymentStats}>
+                  <PaymentStat
+                    type="Cash"
+                    count={stats.cashCount}
+                    color="#10b981"
+                  />
+                  <PaymentStat
+                    type="M-Pesa"
+                    count={stats.mpesaCount}
+                    color="#06b6d4"
+                  />
+                  <PaymentStat
+                    type="Card"
+                    count={stats.cardCount}
+                    color="#8b5cf6"
+                  />
+                </View>
+              </ScrollView>
+            </View>
+          </View>
+        </SafeAreaView>
+      </Modal>
+    </SafeAreaView>
   );
 }
+
+// Helper Components
+const DetailRow = ({ label, value }) => (
+  <View style={styles.detailRow}>
+    <Text style={styles.detailLabel}>{label}</Text>
+    <Text style={styles.detailValue}>{value}</Text>
+  </View>
+);
+
+const StatCard = ({ title, value, icon }) => (
+  <View style={styles.statCardModal}>
+    <View style={styles.statCardLeft}>
+      {icon}
+      <Text style={styles.statCardTitle}>{title}</Text>
+    </View>
+    <Text style={styles.statCardValue}>{value}</Text>
+  </View>
+);
+
+const PaymentStat = ({ type, count, color }) => (
+  <View style={styles.paymentStat}>
+    <View style={[styles.paymentDot, { backgroundColor: color }]} />
+    <Text style={styles.paymentType}>{type}</Text>
+    <Text style={styles.paymentCount}>{count}</Text>
+  </View>
+);
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8fafc',
+    top: 20,
+    backgroundColor: '#f9fafb',
+  },
+  content: {
+    flex: 1,
   },
   header: {
-    paddingTop: 60,
-    paddingBottom: 30,
+    paddingTop: 24,
+    paddingBottom: 32,
+    borderBottomLeftRadius: 32,
+    borderBottomRightRadius: 32,
+    overflow: 'hidden',
+  },
+  headerContent: {
     paddingHorizontal: 24,
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
   },
   headerTop: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 24,
+    marginBottom: 28,
   },
   backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255, 255, 255, 0.25)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   headerTitle: {
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: '700',
     color: '#ffffff',
+    textAlign: 'center',
+    flex: 1,
+    marginHorizontal: 12,
+    letterSpacing: -0.5,
   },
-  downloadButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+  headerActions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  headerActionButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255, 255, 255, 0.25)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  downloadButtonDisabled: {
-    opacity: 0.5,
-  },
   balanceCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.18)',
+    borderRadius: 20,
     padding: 20,
+  },
+  balanceHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
   },
   balanceLabel: {
     fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.9)',
-    marginBottom: 4,
+    color: 'rgba(255, 255, 255, 0.92)',
+    fontWeight: '600',
+    letterSpacing: 0.3,
   },
   balanceAmount: {
-    fontSize: 32,
-    fontWeight: '700',
+    fontSize: 38,
+    fontWeight: '800',
     color: '#ffffff',
     marginBottom: 16,
+    letterSpacing: -0.8,
   },
   summaryRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
   },
   summaryItem: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    flex: 1,
+    justifyContent: 'center',
   },
-  summaryText: {
-    fontSize: 14,
-    fontWeight: '600',
+  divider: {
+    width: 1,
+    height: 24,
+    backgroundColor: 'rgba(255, 255, 255, 0.25)',
   },
   positiveText: {
-    color: '#86efac',
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#a7f3d0',
   },
   negativeText: {
-    color: '#fca5a5',
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#fecaca',
   },
-  searchBar: {
+  searchSection: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: '#ffffff',
+    paddingHorizontal: 24,
+    paddingVertical: 16,
+    backgroundColor: '#f9fafb',
     gap: 12,
   },
   searchContainer: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f8fafc',
-    borderRadius: 12,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#e5e7eb',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.03,
+    shadowRadius: 2,
+    elevation: 1,
   },
   searchInput: {
     flex: 1,
     marginLeft: 12,
     fontSize: 16,
-    color: '#1e293b',
+    color: '#111827',
+    fontWeight: '500',
   },
   filterButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
+    width: 52,
+    height: 52,
+    borderRadius: 16,
     backgroundColor: '#eff6ff',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: '#dbeafe',
+    position: 'relative',
   },
-  sortContainer: {
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
-  },
-  sortContent: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 8,
-  },
-  sortButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: '#f1f5f9',
-  },
-  sortButtonActive: {
+  filterBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
     backgroundColor: '#3b82f6',
+    borderWidth: 2,
+    borderColor: '#ffffff',
   },
-  sortButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#64748b',
+  quickStats: {
+    flexDirection: 'row',
+    paddingHorizontal: 24,
+    marginBottom: 24,
+    gap: 12,
   },
-  sortButtonTextActive: {
-    color: '#ffffff',
-  },
-  activeFilters: {
+  statCard: {
+    flex: 1,
     backgroundColor: '#ffffff',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
-  },
-  activeFiltersTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#475569',
-    marginBottom: 8,
-  },
-  filterChips: {
-    flexDirection: 'row',
-    gap: 8,
-    alignItems: 'center',
-  },
-  filterChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#f8fafc',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
     borderRadius: 16,
+    padding: 16,
+    alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#e5e7eb',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 2,
   },
-  filterChipText: {
+  statCardIncome: {
+    backgroundColor: '#f0fdf4',
+    borderColor: '#bbf7d0',
+  },
+  statCardExpense: {
+    backgroundColor: '#fef2f2',
+    borderColor: '#fecaca',
+  },
+  statValue: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 4,
+  },
+  statValueIncome: {
+    color: '#059669',
+  },
+  statValueExpense: {
+    color: '#dc2626',
+  },
+  statLabel: {
     fontSize: 12,
-    color: '#64748b',
-  },
-  clearAllButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  clearAllText: {
-    fontSize: 12,
-    color: '#3b82f6',
+    color: '#6b7280',
     fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
-  transactionCount: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: '#ffffff',
+  listHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    marginBottom: 16,
   },
-  transactionCountText: {
+  listTitle: {
+    fontSize: 19,
+    fontWeight: '700',
+    color: '#111827',
+    letterSpacing: -0.3,
+  },
+  listCount: {
     fontSize: 14,
-    color: '#64748b',
+    color: '#6b7280',
+    fontWeight: '600',
   },
   listContent: {
-    padding: 16,
-    paddingBottom: 32,
+    paddingHorizontal: 24,
+    paddingBottom: 120,
   },
   transactionCard: {
     backgroundColor: '#ffffff',
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
+    borderRadius: 18,
+    marginBottom: 14,
     borderWidth: 1,
-    borderColor: '#f1f5f9',
+    borderColor: '#f3f4f6',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.03,
+    shadowRadius: 6,
+    elevation: 2,
+    overflow: 'hidden',
   },
-  transactionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
+  transactionContent: {
+    padding: 18,
   },
   transactionLeft: {
-    flex: 1,
     flexDirection: 'row',
     alignItems: 'flex-start',
+    marginBottom: 12,
+  },
+  transactionIconContainer: {
+    marginRight: 14,
+    marginTop: 2,
   },
   transactionIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 42,
+    height: 42,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 12,
   },
-  transactionInfo: {
+  transactionDetails: {
     flex: 1,
   },
   transactionDescription: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#1e293b',
-    marginBottom: 4,
+    color: '#111827',
+    marginBottom: 6,
+    lineHeight: 20,
   },
   transactionMeta: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 12,
     flexWrap: 'wrap',
+  },
+  transactionMetaItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
   },
   transactionDate: {
     fontSize: 12,
-    color: '#64748b',
+    color: '#6b7280',
+    fontWeight: '500',
   },
   paymentTypeBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
   },
   paymentTypeText: {
-    fontSize: 10,
-    fontWeight: '600',
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  transactionRight: {
+    alignItems: 'flex-end',
   },
   transactionAmount: {
-    fontSize: 18,
-    fontWeight: '700',
-    marginLeft: 12,
+    fontSize: 20,
+    fontWeight: '800',
+    marginBottom: 6,
+    lineHeight: 24,
   },
   positiveAmount: {
     color: '#059669',
@@ -996,158 +1128,268 @@ const styles = StyleSheet.create({
   negativeAmount: {
     color: '#dc2626',
   },
-  notesContainer: {
+  transactionStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  statusText: {
+    fontSize: 12,
+    color: '#6b7280',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  notesPreview: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 8,
-    marginTop: 12,
-    padding: 12,
-    backgroundColor: '#f8fafc',
-    borderRadius: 8,
+    gap: 10,
+    padding: 14,
+    backgroundColor: '#f9fafb',
+    borderTopWidth: 1,
+    borderTopColor: '#f3f4f6',
   },
-  notesText: {
+  notesPreviewText: {
     flex: 1,
-    fontSize: 12,
-    color: '#64748b',
+    fontSize: 13,
+    color: '#6b7280',
     fontStyle: 'italic',
+    lineHeight: 18,
   },
   loadingContainer: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 32,
+    padding: 40,
   },
   loadingText: {
-    marginTop: 12,
+    marginTop: 14,
     fontSize: 16,
-    color: '#64748b',
+    color: '#6b7280',
+    fontWeight: '600',
   },
   emptyState: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 32,
+    padding: 40,
+    paddingTop: 80,
+  },
+  emptyStateIcon: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: '#f3f4f6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 24,
   },
   emptyStateTitle: {
-    fontSize: 20,
+    fontSize: 22,
     fontWeight: '700',
-    color: '#1e293b',
-    marginTop: 16,
-    marginBottom: 8,
+    color: '#111827',
+    marginBottom: 10,
+    textAlign: 'center',
+    lineHeight: 28,
   },
   emptyStateText: {
-    fontSize: 14,
-    color: '#64748b',
+    fontSize: 15,
+    color: '#6b7280',
     textAlign: 'center',
-    marginBottom: 24,
+    marginBottom: 28,
     maxWidth: 300,
+    lineHeight: 22,
   },
   emptyStateButton: {
-    paddingHorizontal: 24,
-    paddingVertical: 12,
+    paddingHorizontal: 32,
+    paddingVertical: 14,
     backgroundColor: '#3b82f6',
-    borderRadius: 12,
+    borderRadius: 14,
   },
   emptyStateButtonText: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '600',
     color: '#ffffff',
   },
+
+  // Modal Styles
+  modalContainer: {
+    flex: 1,
+  },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
     justifyContent: 'flex-end',
   },
-  modalContent: {
+  detailModal: {
     backgroundColor: '#ffffff',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    maxHeight: '80%',
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    maxHeight: '90%',
+    paddingTop: 24,
+  },
+  detailHeader: {
+    alignItems: 'center',
+    padding: 24,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f3f4f6',
+  },
+  detailIcon: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 22,
+  },
+  detailAmount: {
+    fontSize: 36,
+    fontWeight: '800',
+    color: '#111827',
+    marginBottom: 10,
+    letterSpacing: -0.5,
+  },
+  detailType: {
+    fontSize: 16,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  detailContent: {
+    padding: 24,
+  },
+  detailRow: {
+    marginBottom: 22,
+  },
+  detailLabel: {
+    fontSize: 14,
+    color: '#6b7280',
+    fontWeight: '600',
+    marginBottom: 6,
+    letterSpacing: 0.3,
+  },
+  detailValue: {
+    fontSize: 16,
+    color: '#111827',
+    fontWeight: '600',
+    lineHeight: 22,
+  },
+  detailActions: {
+    paddingHorizontal: 24,
+    paddingBottom: 32,
+    paddingTop: 16,
+  },
+  closeButton: {
+    paddingVertical: 16,
+    backgroundColor: '#3b82f6',
+    borderRadius: 14,
+    alignItems: 'center',
+  },
+  closeButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  statsModal: {
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    maxHeight: '90%',
+    paddingTop: 24,
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 24,
+    paddingHorizontal: 24,
+    paddingBottom: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
+    borderBottomColor: '#f3f4f6',
   },
   modalTitle: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#1e293b',
+    color: '#111827',
+    letterSpacing: -0.3,
   },
-  modalClose: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#f1f5f9',
+  modalCloseButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#f3f4f6',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  filterOptions: {
-    maxHeight: 400,
-  },
-  filterSection: {
+  statsContent: {
     padding: 24,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
+    paddingBottom: 40,
   },
-  filterSectionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1e293b',
-    marginBottom: 16,
-  },
-  filterOption: {
+  statCardModal: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 12,
-  },
-  filterOptionLeft: {
-    flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-  },
-  filterIcon: {
-    width: 32,
-    height: 32,
+    backgroundColor: '#f9fafb',
     borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
+    padding: 20,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
   },
-  filterOptionText: {
-    fontSize: 16,
-    color: '#1e293b',
-  },
-  modalActions: {
+  statCardLeft: {
     flexDirection: 'row',
-    padding: 24,
-    gap: 12,
-  },
-  modalCancel: {
-    flex: 1,
-    paddingVertical: 16,
-    backgroundColor: '#f1f5f9',
-    borderRadius: 12,
     alignItems: 'center',
+    gap: 14,
   },
-  modalCancelText: {
+  statCardTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#64748b',
+    color: '#111827',
   },
-  modalApply: {
-    flex: 1,
-    paddingVertical: 16,
-    backgroundColor: '#3b82f6',
-    borderRadius: 12,
+  statCardValue: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#3b82f6',
+  },
+  paymentStatsTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111827',
+    marginTop: 28,
+    marginBottom: 18,
+    letterSpacing: -0.3,
+  },
+  paymentStats: {
+    gap: 14,
+  },
+  paymentStat: {
+    flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: '#f9fafb',
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
   },
-  modalApplyText: {
+  paymentDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    marginRight: 14,
+  },
+  paymentType: {
+    flex: 1,
     fontSize: 16,
+    color: '#111827',
     fontWeight: '600',
-    color: '#ffffff',
+  },
+  paymentCount: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#3b82f6',
   },
 });

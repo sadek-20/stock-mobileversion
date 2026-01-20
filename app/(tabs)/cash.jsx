@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -25,11 +25,13 @@ import {
 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useCash } from '../../contexts/CashContext';
-import { useNavigation } from '@react-navigation/native';
+import { useRouter } from 'expo-router';
 
 export default function CashEntryScreen() {
-  const navigation = useNavigation();
+  const router = useRouter();
   const { addCash, balance, transactions, fetchCash } = useCash();
+
+  console.log(transactions, 'transections in cash');
 
   const [amount, setAmount] = useState('');
   const [paymentType, setPaymentType] = useState('Cash');
@@ -37,46 +39,54 @@ export default function CashEntryScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Calculate today's totals
-  const calculateTodayStats = () => {
+  // Normalize transactions and compute today's summary locally
+  const normalizedTransactions = useMemo(() => {
+    const src = Array.isArray(transactions)
+      ? transactions
+      : transactions?.data || [];
+
+    return src
+      .map((t) => ({
+        ...t,
+        amount:
+          typeof t?.amount === 'string'
+            ? parseFloat(t.amount) || 0
+            : t?.amount || 0,
+        paymentType: t?.paymentType
+          ? String(t.paymentType).toUpperCase()
+          : 'UNKNOWN',
+      }))
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  }, [transactions]);
+
+  const recentTransactions = useMemo(
+    () => normalizedTransactions.slice(0, 3),
+    [normalizedTransactions]
+  );
+
+  const { todayEntries, todayTotal, mostUsed } = useMemo(() => {
     const today = new Date().toISOString().split('T')[0];
-    let todayEntries = 0;
-    let todayTotal = 0;
-    let paymentCounts = {};
+    let entries = 0;
+    let total = 0;
+    const counts = {};
 
-    if (transactions && Array.isArray(transactions)) {
-      transactions.forEach((transaction) => {
-        if (!transaction?.createdAt) return;
-
-        const transactionDate = new Date(transaction.createdAt)
-          .toISOString()
-          .split('T')[0];
-
-        if (transactionDate === today) {
-          todayEntries++;
-          todayTotal += transaction.amount || 0;
-
-          // Count payment types
-          const type = transaction.paymentType || 'Unknown';
-          paymentCounts[type] = (paymentCounts[type] || 0) + 1;
-        }
-      });
-    }
-
-    // Find most used payment method today
-    let mostUsed = 'None';
-    let maxCount = 0;
-    Object.entries(paymentCounts).forEach(([method, count]) => {
-      if (count > maxCount) {
-        maxCount = count;
-        mostUsed = method;
+    normalizedTransactions.forEach((tx) => {
+      if (!tx?.createdAt) return;
+      const d = new Date(tx.createdAt).toISOString().split('T')[0];
+      if (d === today) {
+        entries++;
+        total += tx.amount || 0;
+        const type = tx.paymentType || 'Unknown';
+        counts[type] = (counts[type] || 0) + 1;
       }
     });
 
-    return { todayEntries, todayTotal, mostUsed };
-  };
+    const most = Object.keys(counts).length
+      ? Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0]
+      : 'None';
 
-  const { todayEntries, todayTotal, mostUsed } = calculateTodayStats();
+    return { todayEntries: entries, todayTotal: total, mostUsed: most };
+  }, [normalizedTransactions]);
 
   const handleSubmit = async () => {
     if (!amount || parseFloat(amount) <= 0) {
@@ -156,14 +166,11 @@ export default function CashEntryScreen() {
     return numericValue;
   };
 
-  // Get latest transactions for preview
-  const recentTransactions = Array.isArray(transactions)
-    ? transactions.slice(0, 3)
-    : [];
+  // recentTransactions is computed above from normalizedTransactions
 
   const handleViewAll = () => {
-    if (navigation) {
-      navigation.navigate('TransactionHistory');
+    if (router) {
+      router.push('/TransactionHistory');
     }
   };
 
