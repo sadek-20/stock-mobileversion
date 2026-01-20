@@ -12,7 +12,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { useAuth } from '../contexts/AuthContext';
-import { Link } from 'expo-router';
+import { Link, router } from 'expo-router';
 import {
   Eye,
   EyeOff,
@@ -47,7 +47,8 @@ export default function LoginScreen() {
       return Alert.alert('Login-ku waa fashilantay', result.message);
     }
 
-    // Navigation is handled by the auth context/root layout
+    // Navigate to the tabs group after successful login
+    router.replace('/(tabs)');
   };
 
   const disabled = loading || !username.trim() || !password.trim();

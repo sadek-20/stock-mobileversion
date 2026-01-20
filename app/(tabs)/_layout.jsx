@@ -1,4 +1,4 @@
-import { Tabs } from 'expo-router';
+import { Navigator, Tabs } from 'expo-router';
 import {
   Package,
   ArrowDownToLine,
@@ -12,6 +12,9 @@ import { BlurView } from 'expo-blur';
 
 export default function TabLayout() {
   const insets = useSafeAreaInsets();
+
+  // Note: don't attempt to redirect from inside the tabs layout.
+  // The login screen should navigate into this group after authentication.
 
   return (
     <Tabs

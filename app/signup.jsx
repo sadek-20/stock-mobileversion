@@ -26,6 +26,7 @@ import {
   CheckCircle,
 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { router } from 'expo-router';
 
 export default function SignupScreen({ navigation }) {
   const { signup } = useAuth();
@@ -103,10 +104,10 @@ export default function SignupScreen({ navigation }) {
           {
             text: 'Okay',
             onPress: () => {
-              // User is automatically logged in after signup
+              router.replace('/(tabs)');
             },
           },
-        ]
+        ],
       );
     } else {
       Alert.alert('Qalad', result.message);
