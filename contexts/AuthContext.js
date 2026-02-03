@@ -144,16 +144,18 @@ export const AuthProvider = ({ children }) => {
       const user = data?.data?.user;
 
       if (!token) {
-        Alert.alert('Login failed', 'Token not returned from server');
-        return;
+        const msg = data?.message || 'Token not returned from server';
+        Alert.alert('Login failed', msg);
+        return { success: false, message: msg };
       }
 
       await AsyncStorage.setItem('auth_token', token);
       await AsyncStorage.setItem('auth_user', JSON.stringify(user));
+
       // Clear demo mode if exists
 
-      setToken(data.token);
-      setUser(data.user);
+      setToken(token);
+      setUser(user);
 
       return { success: true, message: 'Login successful' };
     } catch (error) {
@@ -175,7 +177,7 @@ export const AuthProvider = ({ children }) => {
 
             await AsyncStorage.setItem(
               'auth_user',
-              JSON.stringify(userWithoutPassword)
+              JSON.stringify(userWithoutPassword),
             );
             await AsyncStorage.setItem('demo_mode', 'true');
             setUser(userWithoutPassword);

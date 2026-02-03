@@ -10,6 +10,7 @@ import { CashProvider } from '../contexts/CashContext'; // Adjust path as needed
 import { useFrameworkReady } from '../hooks/useFrameworkReady';
 import { initializeStorage } from '../utils/storage';
 import TransactionHistoryScreen from './TransactionHistory'; // Add this import
+import { DebtsProvider } from '@/contexts/DebtsContext';
 
 /* ---------------- ANDROID SAFE LOADER ---------------- */
 function AndroidSafeLoader({ size = 'large', color = '#3b82f6' }) {
@@ -227,8 +228,10 @@ export default function RootLayout() {
       <AuthProvider>
         <StockProvider>
           <CashProvider>
-            <RootLayoutNav />
-            <StatusBar style="dark" backgroundColor="#ffffff" />
+            <DebtsProvider>
+              <RootLayoutNav />
+              <StatusBar style="dark" backgroundColor="#ffffff" />
+            </DebtsProvider>
           </CashProvider>
         </StockProvider>
       </AuthProvider>

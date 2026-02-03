@@ -5,39 +5,54 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  ScrollView,
   Alert,
   FlatList,
   RefreshControl,
+  Modal,
+  ScrollView,
+  Platform,
 } from 'react-native';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect } from 'expo-router';
 import {
   CreditCard,
   Plus,
   User,
   Phone,
   Calendar,
-  DollarSign,
+  Clock,
+  Trash2,
+  Edit,
+  CheckCircle,
+  ChevronRight,
 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { getDebts, addDebt, updateDebt, deleteDebt } from '../../utils/storage';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { useDebts } from '../../contexts/DebtsContext';
 
 export default function DebtsScreen() {
-  const [debts, setDebts] = useState([]);
+  const { debts, loading, fetchDebts, createDebt, updateDebt, deleteDebt } =
+    useDebts();
+
   const [refreshing, setRefreshing] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [selectedDebt, setSelectedDebt] = useState(null);
   const [formData, setFormData] = useState({
-    name: '',
-    phone: '',
+    customerName: '',
+    customerContact: '',
     amount: '',
     description: '',
     date: new Date().toISOString().split('T')[0],
+    dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .split('T')[0],
   });
+
+  const [dateField, setDateField] = useState('date');
 
   const loadDebts = async () => {
     try {
-      const data = await getDebts();
-      setDebts(data || []);
+      await fetchDebts();
     } catch (error) {
       Alert.alert('Error', 'Failed to load debts');
     }
@@ -46,7 +61,7 @@ export default function DebtsScreen() {
   useFocusEffect(
     useCallback(() => {
       loadDebts();
-    }, [])
+    }, []),
   );
 
   const onRefresh = async () => {
@@ -59,69 +74,162 @@ export default function DebtsScreen() {
     setFormData((prev) => ({ ...prev, [field]: value }));
   };
 
+  const handleDateChange = (event, selectedDate) => {
+    setShowDatePicker(Platform.OS === 'ios');
+    if (selectedDate) {
+      handleInputChange(dateField, selectedDate.toISOString().split('T')[0]);
+    }
+  };
+
+  const formatDate = (dateString) => {
+    if (!dateString) return 'N/A';
+    const date = new Date(dateString);
+    return date.toLocaleDateString('en-US', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    });
+  };
+
+  const getDaysRemaining = (dueDate) => {
+    if (!dueDate) return null;
+    const today = new Date();
+    const due = new Date(dueDate);
+    const diffTime = due - today;
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    return diffDays;
+  };
+
   const handleAddDebt = async () => {
     if (
-      !formData.name.trim() ||
+      !formData.customerName.trim() ||
       !formData.amount ||
       parseFloat(formData.amount) <= 0
     ) {
-      Alert.alert('Error', 'Please enter valid name and amount');
+      Alert.alert('Error', 'Please enter valid customer name and amount');
       return;
     }
 
     try {
-      await addDebt({
-        ...formData,
+      const debtData = {
+        customerName: formData.customerName,
+        customerContact: formData.customerContact,
         amount: parseFloat(formData.amount),
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-      });
+        description: formData.description,
+        date: formData.date,
+        dueDate: formData.dueDate,
+        status: 'PENDING', // Uppercase as per your data
+      };
+
+      const res = await createDebt(debtData);
+
+      if (!res || !res.success) {
+        throw new Error(res?.message || 'Failed to add debt');
+      }
 
       Alert.alert('Success', 'Debt added successfully');
-      setFormData({
-        name: '',
-        phone: '',
-        amount: '',
-        description: '',
-        date: new Date().toISOString().split('T')[0],
-      });
+      resetForm();
       setShowAddForm(false);
-      loadDebts();
+      await loadDebts();
     } catch (error) {
-      Alert.alert('Error', 'Failed to add debt');
+      Alert.alert('Error', error.message || 'Failed to add debt');
+    }
+  };
+
+  const resetForm = () => {
+    setFormData({
+      customerName: '',
+      customerContact: '',
+      amount: '',
+      description: '',
+      date: new Date().toISOString().split('T')[0],
+      dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+        .toISOString()
+        .split('T')[0],
+    });
+    setSelectedDebt(null);
+  };
+
+  const handleEditDebt = (debt) => {
+    setSelectedDebt(debt);
+    setFormData({
+      customerName: debt.customerName || '',
+      customerContact: debt.customerContact || '',
+      amount: debt.amount ? debt.amount.toString() : '',
+      description: debt.description || '',
+      date: debt.date
+        ? debt.date.split('T')[0]
+        : new Date().toISOString().split('T')[0],
+      dueDate: debt.dueDate
+        ? debt.dueDate.split('T')[0]
+        : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+            .toISOString()
+            .split('T')[0],
+    });
+    setShowAddForm(true);
+  };
+
+  const handleUpdateDebt = async () => {
+    if (!selectedDebt) return;
+
+    try {
+      const res = await updateDebt(selectedDebt.id, {
+        customerName: formData.customerName,
+        customerContact: formData.customerContact,
+        amount: parseFloat(formData.amount),
+        description: formData.description,
+        date: formData.date,
+        dueDate: formData.dueDate,
+      });
+
+      if (!res || !res.success) {
+        throw new Error(res?.message || 'Failed to update debt');
+      }
+
+      Alert.alert('Success', 'Debt updated successfully');
+      resetForm();
+      setShowAddForm(false);
+      await loadDebts();
+    } catch (error) {
+      Alert.alert('Error', error.message || 'Failed to update debt');
     }
   };
 
   const handleMarkPaid = async (debt) => {
     Alert.alert(
       'Mark as Paid',
-      `Mark ${debt.name}'s debt of KSH ${debt.amount} as paid?`,
+      `Mark ${debt.customerName}'s debt of KSH ${debt.amount} as paid?`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Mark Paid',
+          text: 'Mark as Paid',
           onPress: async () => {
             try {
-              await updateDebt(debt.id, {
-                ...debt,
-                status: 'paid',
+              const res = await updateDebt(debt.id, {
+                status: 'PAID',
                 paidAt: new Date().toISOString(),
+                amountPaid: debt.amount,
               });
-              loadDebts();
+
+              if (!res || !res.success) {
+                throw new Error(res?.message || 'Failed to update debt');
+              }
+
+              await loadDebts();
               Alert.alert('Success', 'Debt marked as paid');
             } catch (error) {
-              Alert.alert('Error', 'Failed to update debt');
+              Alert.alert('Error', error.message || 'Failed to update debt');
             }
           },
         },
-      ]
+      ],
     );
   };
 
   const handleDeleteDebt = async (debt) => {
     Alert.alert(
       'Delete Debt',
-      `Are you sure you want to delete ${debt.name}'s debt?`,
+      `Are you sure you want to delete ${debt.customerName}'s debt?`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -129,78 +237,196 @@ export default function DebtsScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              await deleteDebt(debt.id);
-              loadDebts();
-              Alert.alert('Success', 'Debt deleted');
+              const res = await deleteDebt(debt.id);
+
+              if (!res || !res.success) {
+                throw new Error(res?.message || 'Failed to delete debt');
+              }
+
+              await loadDebts();
+              Alert.alert('Success', 'Debt deleted successfully');
             } catch (error) {
-              Alert.alert('Error', 'Failed to delete debt');
+              Alert.alert('Error', error.message || 'Failed to delete debt');
             }
           },
         },
-      ]
+      ],
     );
   };
 
   const totalPending = debts
-    .filter((d) => d.status === 'pending')
-    .reduce((sum, debt) => sum + debt.amount, 0);
+    .filter((d) => d.status === 'PENDING')
+    .reduce((sum, debt) => sum + (debt.amount || 0), 0);
 
-  const renderDebtItem = ({ item }) => (
-    <TouchableOpacity
-      style={[styles.debtCard, item.status === 'paid' && styles.debtCardPaid]}
-      onLongPress={() => handleDeleteDebt(item)}
-    >
-      <View style={styles.debtHeader}>
-        <View style={styles.debtPerson}>
-          <User size={20} color="#64748b" />
-          <Text style={styles.debtName}>{item.name}</Text>
-        </View>
-        <Text
-          style={[
-            styles.debtAmount,
-            item.status === 'paid' && styles.debtAmountPaid,
-          ]}
-        >
-          KSH {item.amount.toLocaleString()}
-        </Text>
-      </View>
+  const totalPaid = debts
+    .filter((d) => d.status === 'PAID')
+    .reduce((sum, debt) => sum + (debt.amount || 0), 0);
 
-      {item.phone && (
-        <View style={styles.debtDetail}>
-          <Phone size={16} color="#94a3b8" />
-          <Text style={styles.debtDetailText}>{item.phone}</Text>
-        </View>
-      )}
+  const overdueDebts = debts.filter((debt) => {
+    if (debt.status === 'PENDING' && debt.dueDate) {
+      const daysRemaining = getDaysRemaining(debt.dueDate);
+      return daysRemaining < 0;
+    }
+    return false;
+  });
 
-      {item.description && (
-        <Text style={styles.debtDescription} numberOfLines={2}>
-          {item.description}
-        </Text>
-      )}
+  const renderDebtItem = ({ item }) => {
+    const daysRemaining = getDaysRemaining(item.dueDate);
+    const isOverdue =
+      daysRemaining !== null && daysRemaining < 0 && item.status === 'PENDING';
+    const isDueSoon =
+      daysRemaining !== null &&
+      daysRemaining >= 0 &&
+      daysRemaining <= 3 &&
+      item.status === 'PENDING';
+    const isPaid = item.status === 'PAID';
 
-      <View style={styles.debtFooter}>
-        <View style={styles.debtDate}>
-          <Calendar size={14} color="#94a3b8" />
-          <Text style={styles.debtDateText}>
-            {new Date(item.date).toLocaleDateString()}
+    return (
+      <View
+        style={[
+          styles.debtCard,
+          isPaid && styles.debtCardPaid,
+          isOverdue && styles.debtCardOverdue,
+          isDueSoon && styles.debtCardDueSoon,
+        ]}
+      >
+        <View style={styles.debtHeader}>
+          <View style={styles.debtPerson}>
+            <View
+              style={[
+                styles.statusIndicator,
+                isPaid
+                  ? styles.statusPaid
+                  : isOverdue
+                    ? styles.statusOverdue
+                    : isDueSoon
+                      ? styles.statusDueSoon
+                      : styles.statusPending,
+              ]}
+            >
+              <User size={16} color={isPaid ? '#ffffff' : '#ffffff'} />
+            </View>
+            <Text
+              style={[styles.debtName, isPaid && styles.debtNamePaid]}
+              numberOfLines={1}
+            >
+              {item.customerName || 'Unknown Customer'}
+            </Text>
+          </View>
+          <Text
+            style={[
+              styles.debtAmount,
+              isPaid && styles.debtAmountPaid,
+              isOverdue && styles.debtAmountOverdue,
+            ]}
+          >
+            KSH {(item.amount || 0).toLocaleString()}
           </Text>
         </View>
 
-        {item.status === 'pending' ? (
-          <TouchableOpacity
-            style={styles.markPaidButton}
-            onPress={() => handleMarkPaid(item)}
-          >
-            <Text style={styles.markPaidButtonText}>Mark Paid</Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.paidBadge}>
-            <Text style={styles.paidBadgeText}>Paid</Text>
+        {item.customerContact && (
+          <View style={styles.debtDetail}>
+            <Phone size={14} color="#94a3b8" />
+            <Text style={styles.debtDetailText}>{item.customerContact}</Text>
           </View>
         )}
+
+        {item.description && (
+          <Text style={styles.debtDescription} numberOfLines={2}>
+            {item.description}
+          </Text>
+        )}
+
+        <View style={styles.debtMeta}>
+          <View style={styles.metaItem}>
+            <Calendar size={12} color="#94a3b8" />
+            <Text style={styles.metaText}>
+              {item.date ? formatDate(item.date) : 'No date'}
+            </Text>
+          </View>
+
+          {item.dueDate && item.status === 'PENDING' && (
+            <View style={styles.metaItem}>
+              <Clock
+                size={12}
+                color={
+                  isOverdue ? '#ef4444' : isDueSoon ? '#f59e0b' : '#94a3b8'
+                }
+              />
+              <Text
+                style={[
+                  styles.metaText,
+                  isOverdue && styles.overdueText,
+                  isDueSoon && styles.dueSoonText,
+                ]}
+              >
+                {isOverdue
+                  ? `Overdue ${Math.abs(daysRemaining)}d`
+                  : daysRemaining === 0
+                    ? 'Due today'
+                    : `Due in ${daysRemaining}d`}
+              </Text>
+            </View>
+          )}
+        </View>
+
+        <View style={styles.debtFooter}>
+          <View style={styles.statusBadge}>
+            {isPaid ? (
+              <View style={styles.paidBadge}>
+                <CheckCircle size={14} color="#059669" />
+                <Text style={styles.paidBadgeText}>PAID</Text>
+              </View>
+            ) : (
+              <View
+                style={[
+                  styles.pendingBadge,
+                  isOverdue && styles.overdueBadge,
+                  isDueSoon && styles.dueSoonBadge,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.pendingBadgeText,
+                    isOverdue && styles.overdueBadgeText,
+                    isDueSoon && styles.dueSoonBadgeText,
+                  ]}
+                >
+                  {isOverdue ? 'OVERDUE' : 'PENDING'}
+                </Text>
+              </View>
+            )}
+          </View>
+
+          <View style={styles.actionButtons}>
+            {item.status === 'PENDING' && (
+              <TouchableOpacity
+                style={styles.paidButton}
+                onPress={() => handleMarkPaid(item)}
+              >
+                <CheckCircle size={16} color="#ffffff" />
+                <Text style={styles.paidButtonText}>Mark Paid</Text>
+              </TouchableOpacity>
+            )}
+
+            <TouchableOpacity
+              style={styles.editButton}
+              onPress={() => handleEditDebt(item)}
+            >
+              <Edit size={16} color="#3b82f6" />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.deleteButton}
+              onPress={() => handleDeleteDebt(item)}
+            >
+              <Trash2 size={16} color="#ef4444" />
+            </TouchableOpacity>
+          </View>
+        </View>
       </View>
-    </TouchableOpacity>
-  );
+    );
+  };
 
   return (
     <View style={styles.container}>
@@ -213,22 +439,29 @@ export default function DebtsScreen() {
       >
         <View style={styles.headerContent}>
           <CreditCard size={32} color="#ffffff" />
-          <Text style={styles.headerTitle}>Debts (Daymaha)</Text>
+          <Text style={styles.headerTitle}>Debt Management</Text>
           <Text style={styles.headerSubtitle}>
             Track and manage outstanding debts
           </Text>
         </View>
 
-        <View style={styles.statsCard}>
-          <View style={styles.statItem}>
+        <View style={styles.statsContainer}>
+          <View style={styles.statCard}>
             <Text style={styles.statLabel}>Total Debts</Text>
             <Text style={styles.statValue}>{debts.length}</Text>
           </View>
-          <View style={styles.statDivider} />
-          <View style={styles.statItem}>
-            <Text style={styles.statLabel}>Pending Amount</Text>
-            <Text style={styles.statValue}>
+
+          <View style={styles.statCard}>
+            <Text style={styles.statLabel}>Pending</Text>
+            <Text style={[styles.statValue, styles.pendingAmount]}>
               KSH {totalPending.toLocaleString()}
+            </Text>
+          </View>
+
+          <View style={styles.statCard}>
+            <Text style={styles.statLabel}>Paid</Text>
+            <Text style={[styles.statValue, styles.paidAmount]}>
+              KSH {totalPaid.toLocaleString()}
             </Text>
           </View>
         </View>
@@ -240,7 +473,12 @@ export default function DebtsScreen() {
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={['#7c3aed']}
+            tintColor="#7c3aed"
+          />
         }
         ListEmptyComponent={
           <View style={styles.emptyState}>
@@ -249,82 +487,174 @@ export default function DebtsScreen() {
             <Text style={styles.emptySubtitle}>
               Add your first debt to start tracking
             </Text>
+            <TouchableOpacity
+              style={styles.addFirstButton}
+              onPress={() => setShowAddForm(true)}
+            >
+              <Plus size={20} color="#ffffff" />
+              <Text style={styles.addFirstButtonText}>Add First Debt</Text>
+            </TouchableOpacity>
           </View>
         }
         showsVerticalScrollIndicator={false}
       />
 
-      {/* Add Debt Form Modal */}
-      {showAddForm && (
+      {/* Add/Edit Debt Modal */}
+      <Modal
+        visible={showAddForm}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => {
+          setShowAddForm(false);
+          resetForm();
+        }}
+      >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Add New Debt</Text>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
+              <Text style={styles.modalTitle}>
+                {selectedDebt ? 'Edit Debt' : 'Add New Debt'}
+              </Text>
 
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Person Name *</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Enter person's name"
-                value={formData.name}
-                onChangeText={(text) => handleInputChange('name', text)}
-              />
-            </View>
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Customer Name *</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Enter customer name"
+                  value={formData.customerName}
+                  onChangeText={(text) =>
+                    handleInputChange('customerName', text)
+                  }
+                />
+              </View>
 
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Phone Number</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Enter phone number"
-                value={formData.phone}
-                onChangeText={(text) => handleInputChange('phone', text)}
-                keyboardType="phone-pad"
-              />
-            </View>
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Phone Number</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Enter phone number"
+                  value={formData.customerContact}
+                  onChangeText={(text) =>
+                    handleInputChange('customerContact', text)
+                  }
+                  keyboardType="phone-pad"
+                />
+              </View>
 
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Amount (KSH) *</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Enter amount"
-                value={formData.amount}
-                onChangeText={(text) => handleInputChange('amount', text)}
-                keyboardType="decimal-pad"
-              />
-            </View>
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Amount (KSH) *</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Enter amount"
+                  value={formData.amount}
+                  onChangeText={(text) => handleInputChange('amount', text)}
+                  keyboardType="decimal-pad"
+                />
+              </View>
 
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Description</Text>
-              <TextInput
-                style={[styles.input, styles.textArea]}
-                placeholder="Optional description"
-                value={formData.description}
-                onChangeText={(text) => handleInputChange('description', text)}
-                multiline
-              />
-            </View>
+              <View style={styles.dateRow}>
+                <View style={styles.dateInputGroup}>
+                  <Text style={styles.inputLabel}>Date</Text>
+                  <TouchableOpacity
+                    style={styles.dateInput}
+                    onPress={() => {
+                      setDateField('date');
+                      setShowDatePicker(true);
+                    }}
+                  >
+                    <Calendar size={18} color="#64748b" />
+                    <Text style={styles.dateText}>
+                      {formData.date
+                        ? formatDate(formData.date)
+                        : 'Select date'}
+                    </Text>
+                    <ChevronRight size={18} color="#94a3b8" />
+                  </TouchableOpacity>
+                </View>
 
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => setShowAddForm(false)}
-              >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.saveButton]}
-                onPress={handleAddDebt}
-              >
-                <Text style={styles.saveButtonText}>Save Debt</Text>
-              </TouchableOpacity>
-            </View>
+                <View style={styles.dateInputGroup}>
+                  <Text style={styles.inputLabel}>Due Date</Text>
+                  <TouchableOpacity
+                    style={styles.dateInput}
+                    onPress={() => {
+                      setDateField('dueDate');
+                      setShowDatePicker(true);
+                    }}
+                  >
+                    <Clock size={18} color="#64748b" />
+                    <Text style={styles.dateText}>
+                      {formData.dueDate
+                        ? formatDate(formData.dueDate)
+                        : 'Select due date'}
+                    </Text>
+                    <ChevronRight size={18} color="#94a3b8" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {showDatePicker && (
+                <DateTimePicker
+                  value={new Date(formData[dateField] || new Date())}
+                  mode="date"
+                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                  onChange={handleDateChange}
+                />
+              )}
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Description</Text>
+                <TextInput
+                  style={[styles.input, styles.textArea]}
+                  placeholder="Enter description (optional)"
+                  value={formData.description}
+                  onChangeText={(text) =>
+                    handleInputChange('description', text)
+                  }
+                  multiline
+                  numberOfLines={3}
+                />
+              </View>
+
+              <View style={styles.modalButtons}>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.cancelButton]}
+                  onPress={() => {
+                    setShowAddForm(false);
+                    resetForm();
+                  }}
+                >
+                  <Text style={styles.cancelButtonText}>Cancel</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.saveButton]}
+                  onPress={selectedDebt ? handleUpdateDebt : handleAddDebt}
+                >
+                  <Text style={styles.saveButtonText}>
+                    {selectedDebt ? 'Update Debt' : 'Save Debt'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
           </View>
         </View>
-      )}
+      </Modal>
 
       {/* Floating Action Button */}
-      <TouchableOpacity style={styles.fab} onPress={() => setShowAddForm(true)}>
-        <Plus size={24} color="#ffffff" />
-      </TouchableOpacity>
+      {!showAddForm && (
+        <TouchableOpacity
+          style={styles.fab}
+          onPress={() => {
+            resetForm();
+            setShowAddForm(true);
+          }}
+        >
+          <Plus size={24} color="#ffffff" />
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
@@ -343,7 +673,7 @@ const styles = StyleSheet.create({
   },
   headerContent: {
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 24,
   },
   headerTitle: {
     fontSize: 28,
@@ -357,32 +687,36 @@ const styles = StyleSheet.create({
     color: 'rgba(255, 255, 255, 0.9)',
     textAlign: 'center',
   },
-  statsCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    borderRadius: 16,
-    padding: 20,
+  statsContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    gap: 12,
   },
-  statItem: {
-    alignItems: 'center',
+  statCard: {
     flex: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    borderRadius: 16,
+    padding: 16,
+    alignItems: 'center',
   },
   statLabel: {
     fontSize: 12,
     color: '#64748b',
-    marginBottom: 4,
+    marginBottom: 6,
   },
   statValue: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '700',
     color: '#1e293b',
   },
-  statDivider: {
-    width: 1,
-    height: 40,
-    backgroundColor: '#e2e8f0',
+  pendingAmount: {
+    color: '#ef4444',
+  },
+  paidAmount: {
+    color: '#10b981',
+  },
+  overdueCount: {
+    color: '#dc2626',
   },
   list: {
     padding: 16,
@@ -391,7 +725,7 @@ const styles = StyleSheet.create({
   debtCard: {
     backgroundColor: '#ffffff',
     borderRadius: 16,
-    padding: 20,
+    padding: 16,
     marginBottom: 12,
     shadowColor: '#000',
     shadowOffset: {
@@ -408,6 +742,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#f8fafc',
     borderColor: '#e2e8f0',
   },
+  debtCardOverdue: {
+    borderLeftWidth: 4,
+    borderLeftColor: '#ef4444',
+  },
+  debtCardDueSoon: {
+    borderLeftWidth: 4,
+    borderLeftColor: '#f59e0b',
+  },
   debtHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -417,21 +759,48 @@ const styles = StyleSheet.create({
   debtPerson: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 10,
+    flex: 1,
+  },
+  statusIndicator: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  statusPending: {
+    backgroundColor: '#3b82f6',
+  },
+  statusPaid: {
+    backgroundColor: '#10b981',
+  },
+  statusOverdue: {
+    backgroundColor: '#ef4444',
+  },
+  statusDueSoon: {
+    backgroundColor: '#f59e0b',
   },
   debtName: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '600',
     color: '#1e293b',
+    flexShrink: 1,
+  },
+  debtNamePaid: {
+    color: '#64748b',
   },
   debtAmount: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '700',
     color: '#ef4444',
   },
   debtAmountPaid: {
     color: '#10b981',
     textDecorationLine: 'line-through',
+  },
+  debtAmountOverdue: {
+    color: '#dc2626',
   },
   debtDetail: {
     flexDirection: 'row',
@@ -449,6 +818,28 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     lineHeight: 20,
   },
+  debtMeta: {
+    flexDirection: 'row',
+    gap: 16,
+    marginBottom: 12,
+  },
+  metaItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  metaText: {
+    fontSize: 12,
+    color: '#94a3b8',
+  },
+  overdueText: {
+    color: '#ef4444',
+    fontWeight: '600',
+  },
+  dueSoonText: {
+    color: '#f59e0b',
+    fontWeight: '600',
+  },
   debtFooter: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -457,40 +848,85 @@ const styles = StyleSheet.create({
     borderTopColor: '#f1f5f9',
     paddingTop: 12,
   },
-  debtDate: {
+  statusBadge: {
+    flex: 1,
+  },
+  pendingBadge: {
+    backgroundColor: '#fef3c7',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+  },
+  pendingBadgeText: {
+    fontSize: 11,
+    color: '#d97706',
+    fontWeight: '600',
+  },
+  overdueBadge: {
+    backgroundColor: '#fee2e2',
+  },
+  overdueBadgeText: {
+    color: '#dc2626',
+  },
+  dueSoonBadge: {
+    backgroundColor: '#fef3c7',
+  },
+  dueSoonBadgeText: {
+    color: '#d97706',
+  },
+  paidBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    backgroundColor: '#d1fae5',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
   },
-  debtDateText: {
-    fontSize: 12,
-    color: '#94a3b8',
+  paidBadgeText: {
+    color: '#059669',
+    fontSize: 11,
+    fontWeight: '600',
   },
-  markPaidButton: {
+  actionButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  paidButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     backgroundColor: '#10b981',
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 8,
   },
-  markPaidButtonText: {
+  paidButtonText: {
     color: '#ffffff',
     fontSize: 12,
     fontWeight: '600',
   },
-  paidBadge: {
-    backgroundColor: '#d1fae5',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
+  editButton: {
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: '#f0f9ff',
+    borderWidth: 1,
+    borderColor: '#e0f2fe',
   },
-  paidBadgeText: {
-    color: '#059669',
-    fontSize: 12,
-    fontWeight: '600',
+  deleteButton: {
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fee2e2',
   },
   emptyState: {
     alignItems: 'center',
     paddingVertical: 60,
+    paddingHorizontal: 20,
   },
   emptyTitle: {
     fontSize: 20,
@@ -503,13 +939,24 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#94a3b8',
     textAlign: 'center',
+    marginBottom: 24,
+  },
+  addFirstButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#7c3aed',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 12,
+  },
+  addFirstButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '600',
   },
   modalOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
     justifyContent: 'center',
     alignItems: 'center',
@@ -518,9 +965,9 @@ const styles = StyleSheet.create({
   modalContent: {
     backgroundColor: '#ffffff',
     borderRadius: 24,
-    padding: 24,
     width: '100%',
-    maxWidth: 400,
+    maxWidth: 500,
+    maxHeight: '80%',
     shadowColor: '#000',
     shadowOffset: {
       width: 0,
@@ -536,9 +983,12 @@ const styles = StyleSheet.create({
     color: '#1e293b',
     marginBottom: 24,
     textAlign: 'center',
+    paddingTop: 24,
+    paddingHorizontal: 24,
   },
   inputGroup: {
     marginBottom: 16,
+    paddingHorizontal: 24,
   },
   inputLabel: {
     fontSize: 14,
@@ -555,14 +1005,41 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e2e8f0',
   },
+  dateRow: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 24,
+    marginBottom: 16,
+  },
+  dateInputGroup: {
+    flex: 1,
+  },
+  dateInput: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    backgroundColor: '#f8fafc',
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  dateText: {
+    fontSize: 16,
+    color: '#1e293b',
+    flex: 1,
+  },
   textArea: {
-    height: 80,
+    minHeight: 80,
     textAlignVertical: 'top',
   },
   modalButtons: {
     flexDirection: 'row',
     gap: 12,
     marginTop: 24,
+    marginBottom: 24,
+    paddingHorizontal: 24,
   },
   modalButton: {
     flex: 1,
